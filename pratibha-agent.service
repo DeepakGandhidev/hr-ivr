@@ -1,0 +1,27 @@
+[Unit]
+Description=Pratibha inbound hiring agent
+After=network.target
+
+[Service]
+Type=simple
+User=pratibha
+WorkingDirectory=/opt/pratibha-agent
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/pratibha-agent/.env
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=5
+
+# A restart mid-call drops a candidate. Give live calls time to finish.
+KillSignal=SIGTERM
+TimeoutStopSec=630
+
+# Candidate CVs and transcripts pass through this process.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/pratibha-agent/logs
+
+[Install]
+WantedBy=multi-user.target

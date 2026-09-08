@@ -1,4 +1,4 @@
-import { sendEmail } from "@/lib/email";
+import { sendAsTenant } from "@/lib/email";
 import type { TenantTransactionClient } from "@/lib/authz";
 
 /**
@@ -41,12 +41,18 @@ export async function notifyCandidateShortlisted(
   try {
     // Owners and admins only. A viewer cannot approve a shortlist, so telling
     // them one is waiting is noise they can do nothing about.
-    const recipients = await tx((db) =>
-      db.user.findMany({
+    const { recipients, connection } = await tx(async (db) => ({
+      recipients: await db.user.findMany({
         where: { tenantId: input.tenantId, role: { in: ["owner", "admin"] as never } },
         select: { email: true, name: true },
-      })
-    );
+      }),
+      // Internal mail goes out the same way candidate mail does, so a tenant
+      // whose sending domain is unverified still receives these.
+      connection: await db.emailConnection.findFirst({
+        where: { tenantId: input.tenantId, status: "connected" },
+        orderBy: { createdAt: "asc" },
+      }),
+    }));
 
     if (recipients.length === 0) return { notified: 0 };
 
@@ -69,7 +75,11 @@ export async function notifyCandidateShortlisted(
     let firstError: string | undefined;
 
     for (const recipient of recipients) {
-      const result = await sendEmail({ to: recipient.email, subject, body });
+      const result = await sendAsTenant(
+        connection,
+        { slug: input.tenantSlug, name: input.tenantName },
+        { to: recipient.email, subject, body }
+      );
       if (result.ok) notified += 1;
       else firstError ??= result.error;
     }

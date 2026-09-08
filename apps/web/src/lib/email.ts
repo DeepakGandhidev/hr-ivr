@@ -1,4 +1,6 @@
 import { Resend } from "resend";
+import { sendViaMailbox } from "@/lib/smtp";
+import type { EmailConnection } from "@pratibha/prisma";
 
 export interface SendEmailPayload {
   to: string;
@@ -77,4 +79,51 @@ export async function sendEmail(payload: SendEmailPayload): Promise<SendEmailRes
     console.error("[email] Send threw:", message, { from: fromAddress });
     return { ok: false, error: message };
   }
+}
+
+/**
+ * Send as the tenant, preferring their own mailbox over the shared provider.
+ *
+ * Order matters and is not arbitrary:
+ *   1. the mailbox they connected — proven credentials, their real address, and
+ *      replies land in the inbox they already read;
+ *   2. Resend — for tenants on OAuth or a forward alias, where we hold no
+ *      password to send with;
+ *   3. log-only, when neither is configured.
+ *
+ * Falling back on a mailbox failure is deliberate but narrow: if their SMTP is
+ * down, a message from the shared sender still beats no message. The result
+ * says which route was taken so the UI can tell the recruiter where their mail
+ * actually went out from.
+ */
+export async function sendAsTenant(
+  connection: EmailConnection | null,
+  tenant: { slug: string; name: string },
+  payload: SendEmailPayload
+): Promise<SendEmailResult & { via: "mailbox" | "resend" | "log" }> {
+  if (connection && connection.provider === "imap" && connection.imapSecret) {
+    const result = await sendViaMailbox(connection, {
+      to: payload.to,
+      subject: payload.subject,
+      body: payload.body,
+      fromName: tenant.name,
+    });
+
+    if (result.ok) {
+      return { ok: true, providerMessageId: result.providerMessageId, via: "mailbox" };
+    }
+
+    console.error("[email] Tenant mailbox send failed, falling back:", result.error);
+    const fallback = await sendEmail(payload);
+    return {
+      ...fallback,
+      via: fallback.logOnly ? "log" : "resend",
+      // Keep the mailbox reason when the fallback also fails, because that is
+      // the one the recruiter can actually fix.
+      ...(fallback.ok ? {} : { error: `mailbox: ${result.error}; provider: ${fallback.error}` }),
+    };
+  }
+
+  const result = await sendEmail(payload);
+  return { ...result, via: result.logOnly ? "log" : "resend" };
 }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import AddCandidates from "@/components/AddCandidates";
+import EmailCandidate from "@/components/EmailCandidate";
 
 interface Screening {
   id: string;
@@ -31,6 +32,7 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [emailing, setEmailing] = useState<Candidate | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -196,13 +198,27 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
                         {latest?.reasonSummary ?? "—"}
                       </td>
                       <td style={{ textAlign: "right" }}>
-                        <button
-                          className="sm"
-                          onClick={() => screenCandidate(candidate.id)}
-                          disabled={busy === candidate.id || Boolean(bulk)}
-                        >
-                          {busy === candidate.id ? "Screening…" : latest ? "Re-screen" : "Screen"}
-                        </button>
+                        <div className="row" style={{ gap: 6, justifyContent: "flex-end", flexWrap: "nowrap" }}>
+                          <button
+                            className="sm"
+                            onClick={() => setEmailing(candidate)}
+                            disabled={!candidate.email || Boolean(bulk)}
+                            title={
+                              candidate.email
+                                ? `Write an email to ${candidate.email}`
+                                : "This candidate has no email address on file"
+                            }
+                          >
+                            Email
+                          </button>
+                          <button
+                            className="sm"
+                            onClick={() => screenCandidate(candidate.id)}
+                            disabled={busy === candidate.id || Boolean(bulk)}
+                          >
+                            {busy === candidate.id ? "Screening…" : latest ? "Re-screen" : "Screen"}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -211,6 +227,18 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
             </table>
           </div>
         </div>
+      )}
+
+      {emailing && (
+        <EmailCandidate
+          tenant={tenant}
+          candidate={emailing}
+          onClose={() => setEmailing(null)}
+          onSent={(text) => {
+            setError(null);
+            setMessage(text);
+          }}
+        />
       )}
     </div>
   );

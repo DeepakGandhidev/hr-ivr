@@ -43,7 +43,7 @@ describe("THEME_SCRIPT", () => {
   it("swallows storage failures, so a blocked cookie jar cannot break the page", () => {
     // A throw here runs before anything else on the page and would leave the
     // app blank rather than merely unthemed.
-    expect(THEME_SCRIPT).toMatch(/try\{.*\}catch\(e\)\{\}/s);
+    expect(THEME_SCRIPT).toMatch(/try\{[\s\S]*\}catch\(e\)\{\}/);
   });
 
   it("is self-contained, so it can be injected as a bare inline script", () => {

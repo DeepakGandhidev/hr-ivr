@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { Action, NotFoundError } from "@pratibha/shared";
 import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
-import { outreachFromAddress, sendEmail } from "@/lib/email";
+import { outreachFromAddress, sendAsTenant } from "@/lib/email";
 import { defaultInterviewInviteVars, renderTemplate } from "@/lib/templates";
 import { validateSendInvitesBody, verifyOutreachGate } from "@/lib/gates";
 
@@ -53,6 +53,8 @@ export async function POST(
 
       // Replies from candidates should land in the tenant's own inbox, not in a
       // Pratibha mailbox nobody reads (§5 Stage 2).
+      // The whole row, not just the address: it now carries the credentials
+      // the invite is actually sent through.
       const connection = await tx.emailConnection.findFirst({
         where: { tenantId: ctx.tenant.id, status: "connected" },
         orderBy: { createdAt: "asc" },
@@ -107,7 +109,9 @@ export async function POST(
         const subject = renderTemplate(template.subject, vars);
         const body = renderTemplate(template.bodyMd, vars);
 
-        const result = await sendEmail({
+        // Prefers the tenant's own mailbox; `fromAddress` is only used if we
+        // fall back to the shared provider.
+        const result = await sendAsTenant(connection, ctx.tenant, {
           to: candidate.email,
           subject,
           body,

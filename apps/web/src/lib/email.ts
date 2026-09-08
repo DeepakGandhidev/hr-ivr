@@ -109,8 +109,16 @@ export async function sendAsTenant(
     savedToSent?: boolean;
   }
 > {
-  if (connection && connection.provider === "imap" && connection.imapSecret) {
-    const result = await sendViaMailbox(connection, {
+  // EMAIL_TRANSPORT forces a route when the default order is wrong for a
+  // deployment. It exists because a mailbox can accept mail and then silently
+  // fail to deliver it: a shared host that answers "250 OK" to every recipient,
+  // including domains that cannot exist, has told us nothing, and there is no
+  // signal in-band to detect that. Setting "resend" skips the mailbox entirely.
+  const forced = process.env.EMAIL_TRANSPORT;
+  const mailboxUsable = Boolean(connection && connection.provider === "imap" && connection.imapSecret);
+
+  if (forced !== "resend" && mailboxUsable) {
+    const result = await sendViaMailbox(connection!, {
       to: payload.to,
       subject: payload.subject,
       body: payload.body,

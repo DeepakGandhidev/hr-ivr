@@ -1,0 +1,612 @@
+// Pratibha v2 — multi-tenant hiring pipeline schema
+// §4 of the BRD. Every tenant-scoped table carries tenant_id.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "./src/generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Platform
+// ---------------------------------------------------------------------------
+
+model Plan {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  priceInr    Int      @map("price_inr")
+  limits      Json
+  features    Json
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenants     Tenant[]
+
+  @@map("plans")
+}
+
+model PlatformUser {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  name            String?
+  authProviderId  String?  @unique @map("auth_provider_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@map("platform_users")
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy & users
+// ---------------------------------------------------------------------------
+
+enum TenantStatus {
+  trial
+  active
+  suspended
+}
+
+model Tenant {
+  id            String       @id @default(cuid())
+  name          String
+  slug          String       @unique
+  planId        String       @map("plan_id")
+  trialEndsAt   DateTime?    @map("trial_ends_at")
+  status        TenantStatus @default(trial)
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  plan          Plan         @relation(fields: [planId], references: [id])
+  users         User[]
+  emailConnections EmailConnection[]
+  jobs          Job[]
+  candidates    Candidate[]
+  outreachTemplates OutreachTemplate[]
+  interviewProtocols InterviewProtocol[]
+  usageMeters   UsageMeter[]
+  auditLogs     AuditLog[]
+
+  @@map("tenants")
+}
+
+enum UserRole {
+  owner
+  admin
+  reviewer
+  viewer
+}
+
+model User {
+  id              String   @id @default(cuid())
+  tenantId        String   @map("tenant_id")
+  email           String
+  name            String?
+  role            UserRole
+  authProviderId  String?  @unique @map("auth_provider_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  jobsCreated     Job[]    @relation("CreatedBy")
+  jobDescriptionsApproved JobDescription[] @relation("ApprovedBy")
+  approvals       Approval[]
+  interviewProtocolsUpdated InterviewProtocol[] @relation("UpdatedBy")
+  outreachTemplates OutreachTemplate[] @relation("UpdatedBy")
+
+  @@unique([tenantId, email])
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// Email ingestion
+// ---------------------------------------------------------------------------
+
+enum EmailProvider {
+  gmail
+  outlook
+  imap
+  forward_alias
+}
+
+enum EmailConnectionStatus {
+  connected
+  error
+  revoked
+}
+
+model EmailConnection {
+  id              String                  @id @default(cuid())
+  tenantId        String                  @map("tenant_id")
+  provider        EmailProvider
+  address         String
+  oauthTokenRef   String?                 @map("oauth_token_ref") // Supabase Vault reference
+  status          EmailConnectionStatus   @default(connected)
+  lastPollAt      DateTime?               @map("last_poll_at")
+  errorDetail     String?                 @map("error_detail")
+  createdAt       DateTime                @default(now()) @map("created_at")
+
+  // --- IMAP (cPanel/webmail, Zoho, Namecheap, any host) -------------------
+  imapHost        String?                 @map("imap_host")
+  imapPort        Int?                    @map("imap_port")
+  imapSecure      Boolean                 @default(true) @map("imap_secure")
+  imapUsername    String?                 @map("imap_username")
+  /// AES-256-GCM sealed mailbox password. Never a plaintext credential.
+  imapSecret      String?                 @map("imap_secret")
+  folder          String                  @default("INBOX")
+
+  /// IMAP UIDs are only unique within a UIDVALIDITY generation. If the server
+  /// renumbers the mailbox, UIDVALIDITY changes and lastSeenUid becomes
+  /// meaningless, so both are stored and compared together before it is used.
+  uidValidity     BigInt?                 @map("uid_validity")
+  lastSeenUid     BigInt?                 @map("last_seen_uid")
+
+  /// Where candidates from this mailbox are filed. With autoRoute off this is
+  /// the destination; with it on this is the fallback for mail that matches no
+  /// open job. Either way, null leaves the connection idle rather than
+  /// guessing a destination.
+  defaultJobId    String?                 @map("default_job_id")
+
+  /// One mailbox for every open role: match each application to a job instead
+  /// of filing everything against a single one.
+  autoRoute       Boolean                 @default(false) @map("auto_route")
+
+  tenant          Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  defaultJob      Job?                    @relation(fields: [defaultJobId], references: [id], onDelete: SetNull)
+
+  @@index([provider, status, lastPollAt])
+  @@map("email_connections")
+}
+
+// ---------------------------------------------------------------------------
+// Jobs & descriptions
+// ---------------------------------------------------------------------------
+
+enum JobStatus {
+  draft
+  open
+  paused
+  closed
+}
+
+model Job {
+  id                String   @id @default(cuid())
+  tenantId          String   @map("tenant_id")
+  slug              String
+  title             String
+  status            JobStatus @default(draft)
+  location          String?
+  salaryBand        String?  @map("salary_band")
+  experienceRange   String?  @map("experience_range")
+  mustHaves         Json     @map("must_haves")
+  goodToHaves       Json     @map("good_to_haves")
+  // §5 Stage 5 / §9: per-job override of the screening threshold. Null means
+  // fall back to DEFAULT_SCREENING_THRESHOLD (70).
+  screeningThreshold Int?    @map("screening_threshold")
+  createdBy         String   @map("created_by")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creator           User     @relation("CreatedBy", fields: [createdBy], references: [id])
+  descriptions      JobDescription[]
+  posts             JobPost[]
+  candidates        Candidate[]
+  shortlists        Shortlist[]
+  callWindows       CallWindow[]
+  interviewProtocols InterviewProtocol[]
+  emailConnections  EmailConnection[]
+
+  @@unique([tenantId, slug])
+  @@map("jobs")
+}
+
+enum DescriptionGeneratedBy {
+  ai
+  human
+}
+
+model JobDescription {
+  id            String                  @id @default(cuid())
+  jobId         String                  @map("job_id")
+  version       Int
+  bodyMd        String                  @map("body_md")
+  generatedBy   DescriptionGeneratedBy  @default(human) @map("generated_by")
+  approvedBy    String?                 @map("approved_by")
+  approvedAt    DateTime?               @map("approved_at")
+  createdAt     DateTime                @default(now()) @map("created_at")
+
+  job           Job                     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  approver      User?                   @relation("ApprovedBy", fields: [approvedBy], references: [id])
+
+  @@unique([jobId, version])
+  @@map("job_descriptions")
+}
+
+enum JobPostChannel {
+  careers_page
+  linkedin
+  naukri
+  manual
+}
+
+enum JobPostStatus {
+  pending
+  posted
+  failed
+  removed
+}
+
+model JobPost {
+  id                    String          @id @default(cuid())
+  jobId                 String          @map("job_id")
+  channel               JobPostChannel
+  status                JobPostStatus   @default(pending)
+  externalRef           String?         @map("external_ref")
+  postedAt              DateTime?       @map("posted_at")
+  includesPratibhaNumber Boolean        @default(true) @map("includes_pratibha_number")
+  errorDetail           String?         @map("error_detail")
+  createdAt             DateTime        @default(now()) @map("created_at")
+
+  job                   Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("job_posts")
+}
+
+// ---------------------------------------------------------------------------
+// Candidates & screening
+// ---------------------------------------------------------------------------
+
+model Candidate {
+  id                String   @id @default(cuid())
+  tenantId          String   @map("tenant_id")
+  jobId             String   @map("job_id")
+  name              String?
+  email             String?
+  phoneE164         String?  @map("phone_e164")
+  cvFileRef         String?  @map("cv_file_ref")
+  cvParsed          Json?    @map("cv_parsed")
+  sourceEmailMsgId  String?  @unique @map("source_email_msg_id")
+  parseFailed       Boolean  @default(false) @map("parse_failed")
+  noPhone           Boolean  @default(false) @map("no_phone")
+
+  /// How this candidate reached this job: 'auto' (matched by the router),
+  /// 'fallback' (matched nothing, filed in the mailbox's fallback job),
+  /// 'fixed' (the mailbox files everything into one job), or 'manual' (a
+  /// recruiter uploaded the CV or typed the details in). Null for rows that
+  /// predate routing.
+  routedBy          String?  @map("routed_by")
+  /// Router score for an 'auto' match, so a confident hit is distinguishable
+  /// from a marginal one when a recruiter reviews the pipeline.
+  routingConfidence Int?     @map("routing_confidence")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job               Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  screenings        Screening[]
+  shortlistItems    ShortlistItem[]
+  outreachEmails    OutreachEmail[]
+  interviewCalls    InterviewCall[]
+
+  @@unique([tenantId, jobId, phoneE164])
+  @@index([tenantId, phoneE164])
+  @@index([tenantId, jobId, email])
+  @@map("candidates")
+}
+
+enum ScreeningVerdict {
+  shortlist
+  archive
+}
+
+model Screening {
+  id                String            @id @default(cuid())
+  candidateId       String            @map("candidate_id")
+  score             Int
+  matchedMustHaves  Json              @map("matched_must_haves")
+  gaps              Json
+  model             String
+  tokensIn          Int               @map("tokens_in")
+  tokensOut         Int               @map("tokens_out")
+  costUsd           Float             @map("cost_usd")
+  verdict           ScreeningVerdict
+  reasonSummary     String            @map("reason_summary")
+  failed            Boolean           @default(false)
+  createdAt         DateTime          @default(now()) @map("created_at")
+
+  candidate         Candidate         @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@map("screenings")
+}
+
+// ---------------------------------------------------------------------------
+// Shortlists & approvals (G2 gate)
+// ---------------------------------------------------------------------------
+
+enum ShortlistStatus {
+  draft
+  awaiting_approval
+  approved
+  rejected
+}
+
+model Shortlist {
+  id          String          @id @default(cuid())
+  jobId       String          @map("job_id")
+  status      ShortlistStatus @default(draft)
+  createdAt   DateTime        @default(now()) @map("created_at")
+
+  job         Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  items       ShortlistItem[]
+  approvals   Approval[]
+
+  @@map("shortlists")
+}
+
+enum ShortlistItemFinalState {
+  approved
+  removed
+}
+
+model ShortlistItem {
+  id          String                   @id @default(cuid())
+  shortlistId String                   @map("shortlist_id")
+  candidateId String                   @map("candidate_id")
+  addedBy     String                   @map("added_by") // 'ai' or user_id
+  removedBy   String?                  @map("removed_by")
+  finalState  ShortlistItemFinalState? @map("final_state")
+  createdAt   DateTime                 @default(now()) @map("created_at")
+
+  shortlist   Shortlist                @relation(fields: [shortlistId], references: [id], onDelete: Cascade)
+  candidate   Candidate                @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@unique([shortlistId, candidateId])
+  @@map("shortlist_items")
+}
+
+model Approval {
+  id            String    @id @default(cuid())
+  shortlistId   String    @map("shortlist_id")
+  approvedBy    String    @map("approved_by")
+  approvedAt    DateTime  @default(now()) @map("approved_at")
+  snapshot      Json
+
+  shortlist     Shortlist @relation(fields: [shortlistId], references: [id], onDelete: Cascade)
+  approver      User      @relation(fields: [approvedBy], references: [id])
+  outreachEmails OutreachEmail[]
+
+  @@map("approvals")
+}
+
+// ---------------------------------------------------------------------------
+// Outreach
+// ---------------------------------------------------------------------------
+
+enum OutreachTemplateType {
+  interview_invite
+  rejection
+  reminder
+}
+
+enum OutreachEmailStatus {
+  sent
+  bounced
+  failed
+}
+
+model OutreachTemplate {
+  id          String                  @id @default(cuid())
+  tenantId    String                  @map("tenant_id")
+  type        OutreachTemplateType
+  subject     String
+  bodyMd      String                  @map("body_md")
+  isDefault   Boolean                 @default(false) @map("is_default")
+  updatedBy   String?                 @map("updated_by")
+  createdAt   DateTime                @default(now()) @map("created_at")
+
+  tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  updater     User?                   @relation("UpdatedBy", fields: [updatedBy], references: [id])
+  emails      OutreachEmail[]
+
+  @@map("outreach_templates")
+}
+
+model OutreachEmail {
+  id            String                @id @default(cuid())
+  candidateId   String                @map("candidate_id")
+  templateId    String                @map("template_id")
+  renderedBody  String                @map("rendered_body")
+  sentAt        DateTime?             @map("sent_at")
+  status        OutreachEmailStatus?
+  approvalId    String                @map("approval_id")
+  createdAt     DateTime              @default(now()) @map("created_at")
+
+  candidate     Candidate             @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  template      OutreachTemplate      @relation(fields: [templateId], references: [id])
+  approval      Approval              @relation(fields: [approvalId], references: [id])
+
+  @@index([approvalId, candidateId])
+  @@map("outreach_emails")
+}
+
+// ---------------------------------------------------------------------------
+// Call windows
+// ---------------------------------------------------------------------------
+
+model CallWindow {
+  id          String   @id @default(cuid())
+  jobId       String   @map("job_id")
+  timezone    String
+  days        Json     // array of weekday numbers 0-6
+  startTime   String   @map("start_time") // HH:mm
+  endTime     String   @map("end_time")   // HH:mm
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("call_windows")
+}
+
+// ---------------------------------------------------------------------------
+// Interview protocols & calls
+// ---------------------------------------------------------------------------
+
+enum InterviewDifficulty {
+  easy
+  moderate
+  hard
+  expert
+}
+
+model InterviewProtocol {
+  id                String    @id @default(cuid())
+  tenantId          String    @map("tenant_id")
+  jobId             String?   @map("job_id") // null = tenant default
+  instructionText   String    @map("instruction_text")
+
+  /// Wall-clock budget for the call. Enforced by the agent, not just requested
+  /// in the prompt: a model asked to be brief is not a guarantee.
+  durationMinutes   Int                 @default(10) @map("duration_minutes")
+  difficulty        InterviewDifficulty @default(moderate)
+  minQuestions      Int                 @default(6) @map("min_questions")
+  maxQuestions      Int                 @default(10) @map("max_questions")
+  /// Optional list of topics to bias questions towards.
+  focusAreas        Json?               @map("focus_areas")
+  /// What the agent calls itself, and the company it says it represents.
+  /// Null falls back to the tenant name.
+  agentName         String?             @map("agent_name")
+  companyName       String?             @map("company_name")
+  version           Int
+  updatedBy         String?   @map("updated_by")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job               Job?      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  updater           User?     @relation("UpdatedBy", fields: [updatedBy], references: [id])
+
+  @@unique([tenantId, jobId])
+  @@map("interview_protocols")
+}
+
+enum InterviewLanguage {
+  en
+  hi
+  hinglish
+}
+
+enum InterviewCallStatus {
+  completed
+  dropped
+  no_show
+  unknown_caller
+  out_of_window
+  declined_consent
+}
+
+model InterviewCall {
+  id              String                @id @default(cuid())
+  candidateId     String                @map("candidate_id")
+  callerNumber    String                @map("caller_number")
+  recognised      Boolean               @default(false)
+  startedAt       DateTime              @default(now()) @map("started_at")
+  endedAt         DateTime?             @map("ended_at")
+  language        InterviewLanguage?
+  status          InterviewCallStatus?
+  recordingRef    String?               @map("recording_ref")
+  transcriptRef   String?               @map("transcript_ref")
+  telephonyCost   Float?                @map("telephony_cost")
+  llmCostUsd      Float?                @map("llm_cost_usd")
+  ttsCostUsd      Float?                @map("tts_cost_usd")
+  sttCostUsd      Float?                @map("stt_cost_usd")
+  createdAt       DateTime              @default(now()) @map("created_at")
+
+  candidate       Candidate             @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  assessmentReport AssessmentReport?
+
+  @@map("interview_calls")
+}
+
+enum Recommendation {
+  strong_yes
+  yes
+  maybe
+  no
+}
+
+model AssessmentReport {
+  id                String            @id @default(cuid())
+  interviewCallId   String            @unique @map("interview_call_id")
+  overallScore      Float             @map("overall_score")
+  recommendation    Recommendation
+  dimensions        Json
+  strengths         String[]
+  concerns          String[]
+  notableQuotes     Json              @map("notable_quotes")
+  generatedAt       DateTime          @default(now()) @map("generated_at")
+
+  interviewCall     InterviewCall     @relation(fields: [interviewCallId], references: [id], onDelete: Cascade)
+
+  @@map("assessment_reports")
+}
+
+// ---------------------------------------------------------------------------
+// Billing & metering
+// ---------------------------------------------------------------------------
+
+model UsageMeter {
+  id                  String   @id @default(cuid())
+  tenantId            String   @map("tenant_id")
+  period              String   // YYYY-MM
+  interviewsUsed      Int      @default(0) @map("interviews_used")
+  screeningsUsed      Int      @default(0) @map("screenings_used")
+  overageInterviews   Int      @default(0) @map("overage_interviews")
+  overageScreenings   Int      @default(0) @map("overage_screenings")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, period])
+  @@map("usage_meters")
+}
+
+// ---------------------------------------------------------------------------
+// Audit & prompt templates
+// ---------------------------------------------------------------------------
+
+enum PromptTemplateKey {
+  jd_generation
+  cv_screening
+  interviewer_system
+  report_generation
+}
+
+model PromptTemplate {
+  id        String            @id @default(cuid())
+  key       PromptTemplateKey
+  version   Int
+  body      String
+  active    Boolean           @default(false)
+  createdAt DateTime          @default(now()) @map("created_at")
+
+  @@unique([key, version])
+  @@index([key, active])
+  @@map("prompt_templates")
+}
+
+model AuditLog {
+  id        String    @id @default(cuid())
+  tenantId  String    @map("tenant_id")
+  actor     String    // user_id | system | platform_admin
+  action    String
+  entity    String
+  entityId  String    @map("entity_id")
+  before    Json?
+  after     Json?
+  reason    String?
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([action, entity])
+  @@map("audit_logs")
+}

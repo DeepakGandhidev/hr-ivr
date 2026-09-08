@@ -1,0 +1,19 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+
+# Candidate transcripts are sensitive personal data under the DPDP Act (3.6).
+# The durable copy belongs in ProMonkey OS, encrypted and access-logged - these
+# are debug output only, and should be deleted once they have served that.
+transcripts/
+
+# Captured webhooks for signature checking carry a live signature and nonce.
+captured*.json
+
+# macOS
+.DS_Store
+
+# Debug audio output from scripts/check-speech.js
+*.wav

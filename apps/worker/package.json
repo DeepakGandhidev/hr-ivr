@@ -1,0 +1,42 @@
+{
+  "name": "@pratibha/worker",
+  "version": "2.0.0",
+  "description": "Inbound-only voice agent and ingestion worker for Pratibha v2.",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "build": "echo 'worker build: no transpile needed'",
+    "test": "vitest run",
+    "lint": "eslint src/",
+    "simulate": "node scripts/simulate-call.js",
+    "check:signature": "node scripts/check-signature.js",
+    "check:speech": "node scripts/check-speech.js",
+    "fake-call": "node scripts/fake-call.js",
+    "check:imap": "node scripts/check-imap.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.27.0",
+    "@pratibha/prisma": "^2.0.0",
+    "@pratibha/shared": "^2.0.0",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "imapflow": "^1.7.8",
+    "mailparser": "^3.9.20",
+    "pdf-parse": "^2.4.5",
+    "pino": "^9.3.2",
+    "pino-pretty": "^11.2.2",
+    "uuid": "^10.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "eslint": "^9.9.0",
+    "vitest": "^2.0.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

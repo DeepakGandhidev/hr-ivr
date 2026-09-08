@@ -1,33 +1,36 @@
 {
-  "name": "pratibha-agent",
-  "version": "1.0.0",
-  "description": "Inbound-only voice agent that screens shortlisted candidates for ProMonkey OS. Plivo telephony, Sarvam speech, Claude brain.",
-  "main": "src/index.js",
+  "name": "pratibha",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Pratibha v2 \u2014 multi-tenant inbound hiring agent",
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
-    "test": "vitest run",
-    "lint": "eslint src/",
-    "simulate": "node scripts/simulate-call.js",
-    "check:signature": "node scripts/check-signature.js",
-    "check:speech": "node scripts/check-speech.js",
-    "fake-call": "node scripts/fake-call.js"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.27.0",
-    "axios": "^1.7.7",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "pino": "^9.3.2",
-    "pino-pretty": "^11.2.2",
-    "uuid": "^10.0.0",
-    "ws": "^8.18.0"
+    "dev": "concurrently \"npm run dev -w apps/web\" \"npm run dev -w apps/worker\"",
+    "build": "npm run build -w apps/web && npm run build -w apps/worker",
+    "start": "npm run start -w apps/worker",
+    "test": "npm run test --workspaces --if-present",
+    "test:authz": "npm run test:authz -w apps/web",
+    "lint": "npm run lint --workspaces --if-present",
+    "db:generate": "npm run db:generate -w packages/prisma",
+    "db:migrate": "npm run db:migrate -w packages/prisma",
+    "db:seed": "npm run db:seed -w packages/prisma",
+    "db:studio": "npm run db:studio -w packages/prisma",
+    "db:mock": "node scripts/seed-mock-data.js",
+    "db:reset": "npm run db:migrate && npm run db:seed && npm run db:mock && npm run db:mock:auth",
+    "db:mock:auth": "node scripts/seed-mock-auth.js",
+    "test:isolation": "node scripts/check-isolation.mjs",
+    "db:test-candidate": "node scripts/add-test-candidate.js",
+    "db:reset-production": "node scripts/reset-production.mjs",
+    "dev:up": "./scripts/dev-up.sh",
+    "dev:down": "./scripts/dev-down.sh",
+    "dev:status": "./scripts/dev-up.sh --status"
   },
   "devDependencies": {
-    "@types/node": "^22.5.0",
-    "eslint": "^9.9.0",
-    "vitest": "^2.0.5"
+    "concurrently": "^8.2.2"
   },
   "engines": {
     "node": ">=20.0.0"

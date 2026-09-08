@@ -1,19 +1,35 @@
+# Dependencies
 node_modules/
+.pnp
+.pnp.js
+
+# Local npm caches
+.npm-cache/
+.npm-cache-local/
+
+# Build outputs
+.next/
+out/
+dist/
+
+# Environment files
 .env
-.env.*
-!.env.example
+.env.local
+.env.*.local
+
+# Logs
 *.log
 
-# Candidate transcripts are sensitive personal data under the DPDP Act (3.6).
-# The durable copy belongs in ProMonkey OS, encrypted and access-logged - these
-# are debug output only, and should be deleted once they have served that.
-transcripts/
-
-# Captured webhooks for signature checking carry a live signature and nonce.
-captured*.json
-
-# macOS
+# OS files
 .DS_Store
+Thumbs.db
 
-# Debug audio output from scripts/check-speech.js
+# Generated code
+packages/prisma/src/generated/
+packages/shared/dist/
+
+# Audio assets
 *.wav
+
+# Local dev process logs
+.dev-logs/

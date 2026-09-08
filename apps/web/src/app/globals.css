@@ -1,0 +1,490 @@
+/* ---------------------------------------------------------------------------
+   Pratibha design system
+
+   Tokens first, then element defaults, then components. The element defaults
+   matter more than usual here: this app has ~18 screens built from bare
+   <input>, <button> and <table>, so styling the elements themselves lifts every
+   screen at once instead of requiring each to be rewritten.
+   --------------------------------------------------------------------------- */
+
+:root {
+  color-scheme: light;
+
+  /* Neutrals — warm grey, so the UI does not read as cold blue-grey. */
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --surface-2: #fbfbfc;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+
+  --text: #18181b;
+  --text-muted: #71717a;
+  --text-subtle: #a1a1aa;
+
+  /* One accent, used sparingly so that "this is actionable" stays meaningful. */
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: #eef2ff;
+  --accent-border: #c7d2fe;
+
+  --success: #15803d;
+  --success-soft: #f0fdf4;
+  --success-border: #bbf7d0;
+
+  --warning: #b45309;
+  --warning-soft: #fffbeb;
+  --warning-border: #fde68a;
+
+  --danger: #b91c1c;
+  --danger-soft: #fef2f2;
+  --danger-border: #fecaca;
+
+  --radius: 10px;
+  --radius-sm: 7px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow: 0 1px 3px rgb(0 0 0 / 0.08), 0 1px 2px -1px rgb(0 0 0 / 0.06);
+  --shadow-lg: 0 10px 24px -6px rgb(0 0 0 / 0.12), 0 4px 8px -4px rgb(0 0 0 / 0.06);
+
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* Dark palette.
+   It appears twice because it applies in two different situations, and CSS
+   cannot share one declaration block across a media-query boundary:
+     1. the OS asks for dark and the user has not pinned light, and
+     2. the user picked dark explicitly, whatever the OS says.
+   Without (2) the toggle could only ever turn dark OFF — someone on a
+   light-preference machine had no way to switch the app to dark at all.
+   The two blocks are generated identical; change one, change the other. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0b0b0d;
+    --surface: #151518;
+    --surface-2: #1c1c20;
+    --border: #2a2a30;
+    --border-strong: #3a3a42;
+
+    --text: #f4f4f5;
+    --text-muted: #a1a1aa;
+    --text-subtle: #71717a;
+
+    --accent: #818cf8;
+    --accent-hover: #a5b4fc;
+    --accent-soft: #1e1b4b;
+    --accent-border: #3730a3;
+
+    --success: #4ade80;
+    --success-soft: #052e16;
+    --success-border: #166534;
+
+    --warning: #fbbf24;
+    --warning-soft: #292014;
+    --warning-border: #78350f;
+
+    --danger: #f87171;
+    --danger-soft: #2a1315;
+    --danger-border: #7f1d1d;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+    --shadow-lg: 0 10px 24px -6px rgb(0 0 0 / 0.6);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+    --bg: #0b0b0d;
+    --surface: #151518;
+    --surface-2: #1c1c20;
+    --border: #2a2a30;
+    --border-strong: #3a3a42;
+
+    --text: #f4f4f5;
+    --text-muted: #a1a1aa;
+    --text-subtle: #71717a;
+
+    --accent: #818cf8;
+    --accent-hover: #a5b4fc;
+    --accent-soft: #1e1b4b;
+    --accent-border: #3730a3;
+
+    --success: #4ade80;
+    --success-soft: #052e16;
+    --success-border: #166534;
+
+    --warning: #fbbf24;
+    --warning-soft: #292014;
+    --warning-border: #78350f;
+
+    --danger: #f87171;
+    --danger-soft: #2a1315;
+    --danger-border: #7f1d1d;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+    --shadow-lg: 0 10px 24px -6px rgb(0 0 0 / 0.6);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 { margin: 0 0 0.5em; line-height: 1.25; letter-spacing: -0.011em; }
+h1 { font-size: 24px; font-weight: 650; }
+h2 { font-size: 19px; font-weight: 650; }
+h3 { font-size: 15px; font-weight: 650; }
+p { margin: 0 0 1em; }
+p:last-child { margin-bottom: 0; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, pre { font-family: var(--mono); font-size: 0.9em; }
+code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+/* --- forms ---------------------------------------------------------------- */
+
+label { display: block; font-weight: 550; font-size: 13px; margin-bottom: 5px; color: var(--text); }
+
+input[type="text"], input[type="email"], input[type="password"],
+input[type="number"], input[type="time"], input[type="url"],
+input[type="search"], select, textarea {
+  width: 100%;
+  padding: 8px 11px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+input::placeholder, textarea::placeholder { color: var(--text-subtle); }
+input:disabled, select:disabled, textarea:disabled { background: var(--surface-2); color: var(--text-muted); cursor: not-allowed; }
+
+/* Checkboxes and radios sit inline with their label text, so they must not
+   inherit the full-width rule above. */
+input[type="checkbox"], input[type="radio"] { width: auto; accent-color: var(--accent); margin-right: 7px; }
+
+select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+                    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 52%, calc(100% - 12px) 52%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 32px;
+}
+
+/* --- buttons -------------------------------------------------------------- */
+
+button, .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 15px;
+  font: inherit;
+  font-weight: 550;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+}
+button:hover:not(:disabled), .btn:hover { background: var(--surface-2); border-color: var(--text-subtle); text-decoration: none; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-primary, button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover, button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #fff;
+}
+
+button.danger { color: var(--danger); border-color: var(--danger-border); }
+button.danger:hover:not(:disabled) { background: var(--danger-soft); }
+
+button.ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
+button.ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+
+button.sm { padding: 5px 10px; font-size: 13px; }
+
+/* --- layout primitives ---------------------------------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  box-shadow: var(--shadow-sm);
+}
+
+.stack > * + * { margin-top: 14px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.grid { display: grid; gap: 14px; }
+.muted { color: var(--text-muted); }
+.subtle { color: var(--text-subtle); font-size: 13px; }
+
+/* --- tables --------------------------------------------------------------- */
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+thead th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+tbody td { padding: 11px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--surface-2); }
+
+/* Wide tables scroll inside their own container rather than the page body. */
+.table-wrap { overflow-x: auto; }
+
+/* --- badges --------------------------------------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.badge-neutral { background: var(--surface-2); color: var(--text-muted); border-color: var(--border); }
+.badge-success { background: var(--success-soft); color: var(--success); border-color: var(--success-border); }
+.badge-warning { background: var(--warning-soft); color: var(--warning); border-color: var(--warning-border); }
+.badge-danger  { background: var(--danger-soft);  color: var(--danger);  border-color: var(--danger-border); }
+.badge-accent  { background: var(--accent-soft);  color: var(--accent);  border-color: var(--accent-border); }
+
+/* --- notices -------------------------------------------------------------- */
+
+.notice { padding: 11px 14px; border-radius: var(--radius-sm); border: 1px solid; font-size: 14px; }
+.notice-error   { background: var(--danger-soft);  border-color: var(--danger-border);  color: var(--danger); }
+.notice-success { background: var(--success-soft); border-color: var(--success-border); color: var(--success); }
+.notice-info    { background: var(--accent-soft);  border-color: var(--accent-border);  color: var(--accent); }
+
+/* --- app shell ------------------------------------------------------------ */
+
+.shell { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 224px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 650;
+  font-size: 15px;
+  color: var(--text);
+  padding: 4px 8px 14px;
+}
+.brand:hover { text-decoration: none; }
+.brand-mark {
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.nav-section {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-subtle);
+  padding: 14px 8px 5px;
+  font-weight: 600;
+}
+
+.nav-link {
+  display: block;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.nav-link:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+.nav-link[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+.content { flex: 1; padding: 28px 32px; min-width: 0; }
+.page-head { margin-bottom: 22px; }
+.page-head h1 { margin-bottom: 4px; }
+
+/* --- auth screens --------------------------------------------------------- */
+
+.auth-wrap {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 30px;
+  box-shadow: var(--shadow-lg);
+}
+
+/* --- stats ---------------------------------------------------------------- */
+
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 15px 16px;
+  display: block;
+  color: inherit;
+}
+a.stat:hover { border-color: var(--border-strong); text-decoration: none; box-shadow: var(--shadow); }
+.stat-value { font-size: 26px; font-weight: 680; letter-spacing: -0.02em; line-height: 1.15; }
+.stat-label { font-size: 12.5px; color: var(--text-muted); margin-top: 2px; }
+.stat-attention { border-color: var(--warning-border); background: var(--warning-soft); }
+.stat-attention .stat-value { color: var(--warning); }
+
+/* --- empty states --------------------------------------------------------- */
+
+.empty { text-align: center; padding: 44px 24px; }
+.empty h3 { margin-bottom: 6px; }
+.empty p { color: var(--text-muted); max-width: 46ch; margin-inline: auto; }
+
+/* --- file drop / upload --------------------------------------------------- */
+
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  text-align: center;
+  padding: 28px 20px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.dropzone:hover, .dropzone:focus-visible { border-color: var(--accent-border); background: var(--accent-soft); }
+.dropzone-active { border-color: var(--accent); background: var(--accent-soft); }
+
+.file-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.file-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  font-size: 13.5px;
+}
+.file-list li + li { border-top: 1px solid var(--border); }
+/* The filename takes the slack so size and remove stay pinned right. */
+.file-list li > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- theme toggle --------------------------------------------------------- */
+
+.theme-toggle {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+}
+
+/* Overrides the global button rule, which paints a bordered surface button. */
+.theme-toggle button {
+  flex: 1;
+  padding: 5px 0;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1;
+  cursor: pointer;
+}
+.theme-toggle button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
+  border-color: transparent;
+}
+.theme-toggle button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Sidebar mount: pushed to the bottom so it never sits between nav groups. */
+.sidebar .theme-toggle { margin-top: auto; }
+
+/* Auth and marketing screens have no sidebar, so the toggle floats instead. */
+.theme-toggle-floating {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: 168px;
+  z-index: 10;
+  background: var(--surface);
+}
+
+@media (max-width: 720px) {
+  .sidebar .theme-toggle { margin-top: 0; width: 100%; }
+}
+
+@media (max-width: 720px) {
+  .shell { flex-direction: column; }
+  .sidebar { width: 100%; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--border); }
+  .nav-section { display: none; }
+  .content { padding: 20px 16px; }
+}

@@ -13,8 +13,14 @@ interface Screening {
   createdAt: string;
 }
 
+interface Job {
+  id: string;
+  title: string;
+}
+
 interface Candidate {
   id: string;
+  routedBy?: string | null;
   name?: string | null;
   email?: string | null;
   phoneE164?: string | null;
@@ -33,6 +39,8 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [emailing, setEmailing] = useState<Candidate | null>(null);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [moving, setMoving] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -50,6 +58,42 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
   useEffect(() => {
     load();
   }, [load]);
+
+  // The move target list. Failures are silent: this only powers a dropdown, and
+  // an error banner here would look like the candidate list itself had failed.
+  useEffect(() => {
+    fetch(`/api/${tenant}/jobs`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => setJobs(d.jobs ?? []))
+      .catch(() => {});
+  }, [tenant]);
+
+  async function moveCandidate(candidateId: string, jobId: string) {
+    setMoving(candidateId);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/${tenant}/candidates/${candidateId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "Could not move this candidate");
+
+      await load();
+      setMessage(
+        `Moved to ${data.movedTo}.` +
+          (data.discardedScreenings
+            ? ` Their previous score was cleared — screen them again for the new role.`
+            : "")
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not move this candidate");
+    } finally {
+      setMoving(null);
+    }
+  }
 
   /** @returns true when the candidate was scored, so bulk runs can stop on failure. */
   async function screenOne(candidateId: string): Promise<boolean> {
@@ -178,6 +222,14 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
                           {candidate.name || <span style={{ color: "var(--danger)" }}>Could not parse</span>}
                         </div>
                         <div className="subtle">{candidate.email || "no email"}</div>
+                        {candidate.routedBy === "fallback" && (
+                          // The router could not match this application to a
+                          // job and filed it here as a last resort, so it is
+                          // the most likely one to be sitting on the wrong role.
+                          <span className="badge badge-warning" style={{ marginTop: 4 }}>
+                            unmatched — filed here as fallback
+                          </span>
+                        )}
                       </td>
                       <td>
                         {candidate.phoneE164 ?? (
@@ -199,6 +251,27 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
                       </td>
                       <td style={{ textAlign: "right" }}>
                         <div className="row" style={{ gap: 6, justifyContent: "flex-end", flexWrap: "nowrap" }}>
+                          <select
+                            aria-label={`Move ${candidate.name ?? "candidate"} to another job`}
+                            title="Move this candidate to another job"
+                            value=""
+                            disabled={moving === candidate.id || Boolean(bulk)}
+                            onChange={(e) => {
+                              if (e.target.value) moveCandidate(candidate.id, e.target.value);
+                            }}
+                            style={{ width: "auto", padding: "5px 8px", fontSize: 13 }}
+                          >
+                            <option value="">
+                              {moving === candidate.id ? "Moving…" : "Move to…"}
+                            </option>
+                            {jobs
+                              .filter((job) => job.id !== id)
+                              .map((job) => (
+                                <option key={job.id} value={job.id}>
+                                  {job.title}
+                                </option>
+                              ))}
+                          </select>
                           <button
                             className="sm"
                             onClick={() => setEmailing(candidate)}

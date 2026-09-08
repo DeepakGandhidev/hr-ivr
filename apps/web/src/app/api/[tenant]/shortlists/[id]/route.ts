@@ -18,6 +18,12 @@ export async function GET(
             include: {
               candidate: {
                 include: {
+                  // The shortlist renders each candidate's score and verdict.
+                  // Without this the page read `candidate.screenings[0]` on an
+                  // undefined property and threw, which React turns into a
+                  // blank "client-side exception" for the whole route — so the
+                  // shortlist disappeared entirely the moment it had a member.
+                  screenings: { orderBy: { createdAt: "desc" }, take: 1 },
                   // Enough to tell the recruiter whether this person has already
                   // been invited, and under which approval. renderedBody is
                   // deliberately not selected: it is the full email text on

@@ -32,6 +32,7 @@ export enum Action {
   // Candidates
   candidateRead = 'candidate:read',
   candidateCreate = 'candidate:create',
+  candidateUpdate = 'candidate:update',
   candidateScreen = 'candidate:screen',
 
   // Shortlists
@@ -66,6 +67,9 @@ const PERMISSIONS: Record<Action, UserRole> = {
   // Adding a CV by hand writes into the same pipeline the mailbox feeds, so it
   // sits at the same level as screening rather than with the read actions.
   [Action.candidateCreate]: UserRole.admin,
+  // Moving a candidate between jobs discards their screening and shortlist
+  // placement for the old role, so it sits with the other candidate writes.
+  [Action.candidateUpdate]: UserRole.admin,
   [Action.candidateScreen]: UserRole.admin,
 
   [Action.shortlistRead]: UserRole.viewer,

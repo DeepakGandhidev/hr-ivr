@@ -22,7 +22,8 @@ interface Candidate {
   name?: string | null;
   email?: string | null;
   phoneE164?: string | null;
-  screenings: Screening[];
+  /** Optional: a caller that forgets to include it must not crash the page. */
+  screenings?: Screening[];
   outreachEmails?: OutreachEmail[];
 }
 
@@ -50,7 +51,7 @@ interface Shortlist {
 
 interface JobCandidate {
   id: string;
-  screenings: { score: number; verdict: string }[];
+  screenings?: { score: number; verdict: string }[];
 }
 
 interface SendResult {
@@ -203,8 +204,8 @@ export default function ShortlistPage({ params }: { params: { tenant: string; id
   const pending = invitable.filter((item) => !invitedUnderApproval(item.candidate));
   const withoutEmail = activeItems.filter((item) => !item.candidate.email);
 
-  const screened = jobCandidates.filter((c) => c.screenings.length > 0);
-  const topScore = screened.reduce((max, c) => Math.max(max, c.screenings[0].score), 0);
+  const screened = jobCandidates.filter((c) => (c.screenings?.length ?? 0) > 0);
+  const topScore = screened.reduce((max, c) => Math.max(max, c.screenings?.[0]?.score ?? 0), 0);
 
   /**
    * Why is this list empty? The three answers need different actions, and the
@@ -323,7 +324,7 @@ export default function ShortlistPage({ params }: { params: { tenant: string; id
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
           {activeItems.map((item) => {
-            const latest = item.candidate.screenings[0];
+            const latest = item.candidate.screenings?.[0];
             const invited = invitedUnderApproval(item.candidate);
             const hasEmail = Boolean(item.candidate.email);
             const busy = sending === item.candidateId || sending === "all";
@@ -427,7 +428,7 @@ export default function ShortlistPage({ params }: { params: { tenant: string; id
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
           {archivedItems.map((item) => {
-            const latest = item.candidate.screenings[0];
+            const latest = item.candidate.screenings?.[0];
             return (
               <li key={item.id} className="card" style={{ marginBottom: 12, opacity: 0.65 }}>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>

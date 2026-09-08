@@ -91,7 +91,16 @@ describe("smtpCandidates", () => {
   });
 
   it("refuses a tampered credential instead of sending a garbage login", () => {
-    const tampered = connection({ imapSecret: sealSecret("s3cret", KEY).replace(/.$/, "X") });
+    // Flip a bit in the GCM auth tag. Corrupting the last base64 character
+    // instead was flaky: the IV is random, so some ciphertexts still decoded
+    // after the edit and the test passed for the wrong reason.
+    const [version, iv, tag, ciphertext] = sealSecret("s3cret", KEY).split(".");
+    const tagBytes = Buffer.from(tag, "base64");
+    tagBytes[0] ^= 0xff;
+    const tampered = connection({
+      imapSecret: [version, iv, tagBytes.toString("base64"), ciphertext].join("."),
+    });
+
     expect(() => smtpCandidates(tampered)).toThrow();
   });
 });

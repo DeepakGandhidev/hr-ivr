@@ -77,7 +77,8 @@ export default function EmailCandidate({ tenant, candidate, onClose, onSent }: P
       onSent(
         data.logOnly
           ? `Logged only — no mail provider is configured, so nothing was delivered to ${data.to}.`
-          : `Email sent to ${data.to}${data.via === "mailbox" ? " from your connected mailbox" : ""}.`
+          : `Email sent to ${data.to}${data.via === "mailbox" ? " from your connected mailbox" : ""}.` +
+              (data.savedToSent ? " A copy is in your Sent folder." : "")
       );
       onClose();
     } catch (e) {

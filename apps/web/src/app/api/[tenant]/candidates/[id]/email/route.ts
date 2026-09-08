@@ -86,7 +86,16 @@ export async function POST(
       action: result.ok ? "candidate.email.sent" : "candidate.email.failed",
       entity: "candidate",
       entityId: candidate.id,
-      after: { to: candidate.email, subject, via: result.via },
+      after: {
+        to: candidate.email,
+        subject,
+        via: result.via,
+        // The provider's own words. Without these an audit row saying "sent"
+        // is unfalsifiable, which is what made "is mail actually going out?"
+        // so slow to answer.
+        smtpResponse: result.smtpResponse ?? null,
+        savedToSent: result.savedToSent ?? null,
+      },
       reason: result.ok ? undefined : result.error,
     }).catch((error) => console.error("Failed to audit manual candidate email", error));
 
@@ -101,6 +110,7 @@ export async function POST(
       sent: true,
       to: candidate.email,
       via: result.via,
+      savedToSent: result.savedToSent ?? false,
       /** Tells the recruiter it was only logged, not actually delivered. */
       logOnly: result.via === "log",
     });

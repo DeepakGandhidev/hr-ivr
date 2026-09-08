@@ -1,4 +1,6 @@
 import nodemailer from "nodemailer";
+import MailComposer from "nodemailer/lib/mail-composer/index.js";
+import { ImapFlow } from "imapflow";
 import { openSecret } from "@pratibha/shared/crypto";
 import type { EmailConnection } from "@pratibha/prisma";
 
@@ -67,6 +69,65 @@ export interface MailboxSendResult {
   error?: string;
   /** Which port actually worked, so the settings panel can report it. */
   port?: number;
+  /** The SMTP server's own reply, e.g. "250 OK id=...". */
+  response?: string;
+  /** Recipients the server took responsibility for. */
+  accepted?: string[];
+  rejected?: string[];
+  /** Whether a copy was filed in the mailbox's Sent folder. */
+  savedToSent?: boolean;
+}
+
+/**
+ * Put a copy in the mailbox's Sent folder.
+ *
+ * SMTP delivers a message; it does not file one. Every mail client you have
+ * used runs a separate IMAP APPEND to put the copy in Sent, and without it the
+ * recruiter opens webmail, sees nothing in Sent, and reasonably concludes the
+ * app never sent anything — which is exactly the report this fixes. The message
+ * really had gone, with no trace on their side.
+ *
+ * Never throws: the mail is already delivered by the time this runs, so a
+ * failure here is a missing copy, not a failed send.
+ */
+async function saveToSentFolder(
+  connection: EmailConnection,
+  target: SmtpTarget,
+  raw: Buffer
+): Promise<boolean> {
+  const client = new ImapFlow({
+    host: connection.imapHost!,
+    port: connection.imapPort ?? 993,
+    secure: connection.imapSecure ?? true,
+    auth: { user: target.user, pass: target.pass },
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 20_000,
+    logger: false,
+  });
+
+  try {
+    await client.connect();
+
+    // The Sent folder has no fixed name: cPanel uses INBOX.Sent, others use
+    // Sent or Sent Items. The \Sent special-use flag is the reliable answer
+    // when the server publishes it, so that is tried before guessing.
+    const boxes = await client.list();
+    const special = boxes.find((box) => box.specialUse === "\\Sent");
+    const byName = boxes.find((box) => /^(INBOX[./])?Sent( Items| Mail)?$/i.test(box.path));
+    const path = special?.path ?? byName?.path;
+    if (!path) return false;
+
+    // \Seen because the sender has, by definition, read what they just wrote —
+    // without it the Sent folder shows a bogus unread badge.
+    await client.append(path, raw, ["\\Seen"]);
+    return true;
+  } catch (error) {
+    console.error("[email] Could not file a copy in Sent:", error instanceof Error ? error.message : error);
+    return false;
+  } finally {
+    await client.logout().catch(() => {});
+  }
 }
 
 /**
@@ -103,13 +164,34 @@ export async function sendViaMailbox(
     });
 
     try {
-      const info = await transport.sendMail({
+      // Composed once and sent as raw, so the copy filed in Sent is byte-for-byte
+      // the message that was delivered — same Message-ID, same date. Composing
+      // twice would put a near-miss in Sent that does not match what arrived.
+      const raw = await new MailComposer({
         from: payload.fromName ? `${payload.fromName} <${target.from}>` : target.from,
         to: payload.to,
         subject: payload.subject,
         text: payload.body,
+      })
+        .compile()
+        .build();
+
+      const info = await transport.sendMail({
+        raw,
+        envelope: { from: target.from, to: payload.to },
       });
-      return { ok: true, providerMessageId: info.messageId, port: target.port };
+
+      const savedToSent = await saveToSentFolder(connection, target, raw);
+
+      return {
+        ok: true,
+        providerMessageId: info.messageId,
+        port: target.port,
+        response: info.response,
+        accepted: (info.accepted ?? []).map(String),
+        rejected: (info.rejected ?? []).map(String),
+        savedToSent,
+      };
     } catch (error) {
       lastError = error instanceof Error ? error.message : "SMTP send failed";
       // An authentication failure is the credential being wrong, not the port

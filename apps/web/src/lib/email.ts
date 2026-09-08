@@ -100,7 +100,15 @@ export async function sendAsTenant(
   connection: EmailConnection | null,
   tenant: { slug: string; name: string },
   payload: SendEmailPayload
-): Promise<SendEmailResult & { via: "mailbox" | "resend" | "log" }> {
+): Promise<
+  SendEmailResult & {
+    via: "mailbox" | "resend" | "log";
+    /** The SMTP server's reply, when the tenant's own mailbox was used. */
+    smtpResponse?: string;
+    /** Whether a copy was filed in their Sent folder. */
+    savedToSent?: boolean;
+  }
+> {
   if (connection && connection.provider === "imap" && connection.imapSecret) {
     const result = await sendViaMailbox(connection, {
       to: payload.to,
@@ -110,7 +118,13 @@ export async function sendAsTenant(
     });
 
     if (result.ok) {
-      return { ok: true, providerMessageId: result.providerMessageId, via: "mailbox" };
+      return {
+        ok: true,
+        providerMessageId: result.providerMessageId,
+        via: "mailbox",
+        smtpResponse: result.response,
+        savedToSent: result.savedToSent,
+      };
     }
 
     console.error("[email] Tenant mailbox send failed, falling back:", result.error);

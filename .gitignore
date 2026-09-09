@@ -33,3 +33,6 @@ packages/shared/dist/
 
 # Local dev process logs
 .dev-logs/
+
+# Docker dev env (real keys)
+.env.docker

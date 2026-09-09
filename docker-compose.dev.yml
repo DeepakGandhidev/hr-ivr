@@ -1,0 +1,113 @@
+# The whole stack, for someone who has just cloned the repo.
+#
+#   cp .env.docker.example .env.docker
+#   docker compose -f docker-compose.dev.yml up
+#
+# Deliberately a development setup: source is bind-mounted and both services
+# hot-reload, because the alternative - rebuilding an image per edit - is not
+# something anyone will tolerate twice.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pratibha
+      POSTGRES_PASSWORD: pratibha
+      POSTGRES_DB: pratibha
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Runs once, on an empty data directory only. If you change it later you
+      # must `docker compose down -v` for it to take effect again.
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pratibha -d pratibha"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Supabase's auth server, run directly rather than through the Supabase CLI,
+  # so a colleague needs Docker and nothing else installed.
+  auth:
+    image: supabase/gotrue:v2.177.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      PORT: 9999
+      API_EXTERNAL_URL: http://localhost:9999
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:supabase_auth_admin@postgres:5432/pratibha?search_path=auth&sslmode=disable
+      GOTRUE_SITE_URL: http://localhost:3000
+      GOTRUE_URI_ALLOW_LIST: http://localhost:3000,http://localhost:3000/*
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+      # No SMTP locally: accounts confirm themselves, so nobody has to fish a
+      # verification link out of a mail catcher to log in.
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+    ports:
+      - "9999:9999"
+
+  # Applies migrations, then exits. Both services wait for it, so neither ever
+  # starts against a schema that does not exist yet.
+  migrate:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://pratibha:pratibha@postgres:5432/pratibha
+    command: sh -c "cd packages/prisma && npx prisma migrate deploy"
+
+  worker:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env.docker
+    environment:
+      DATABASE_URL: postgres://pratibha:pratibha@postgres:5432/pratibha
+      PORT: "8091"
+    ports:
+      - "8091:8091"
+    volumes:
+      - ./apps:/app/apps
+      - ./packages:/app/packages
+      - ./scripts:/app/scripts
+      # Anonymous volumes: keep the image's installed tree, so the host's
+      # node_modules (or absence of one) does not shadow it.
+      - /app/node_modules
+      - /app/packages/prisma/src/generated
+      - /app/packages/shared/dist
+    command: npm run dev -w @pratibha/worker
+
+  web:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env.docker
+    environment:
+      DATABASE_URL: postgres://pratibha:pratibha@postgres:5432/pratibha
+      APP_DATABASE_URL: postgres://pratibha_app:pratibha_app@postgres:5432/pratibha
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps:/app/apps
+      - ./packages:/app/packages
+      - /app/node_modules
+      - /app/apps/web/.next
+      - /app/packages/prisma/src/generated
+      - /app/packages/shared/dist
+    command: npm run dev -w @pratibha/web
+
+volumes:
+  postgres_data:

@@ -1,0 +1,37 @@
+# Build context excludes.
+#
+# The first block is the important one: `COPY . .` would otherwise bake the
+# maintainer's real .env files - production database URL, model and telephony
+# keys - into an image that then gets shared. Prisma also refuses to run at all
+# when a stray .env conflicts with the environment, which is how this was
+# noticed.
+.env
+.env.*
+!.env.example
+!.env.docker.example
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.local.example
+
+# Installed and generated trees: rebuilt inside the image, and a host copy
+# built on a different platform will not run there.
+node_modules
+**/node_modules
+.next
+**/.next
+packages/prisma/src/generated
+packages/shared/dist
+**/*.tsbuildinfo
+
+# Not needed to run the app.
+.git
+.gitignore
+.npm-cache
+.npm-cache-local
+.dev-logs
+*.log
+*.wav
+supabase/.branches
+supabase/.temp
+.DS_Store

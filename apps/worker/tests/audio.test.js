@@ -183,6 +183,63 @@ describe('Plivo stream protocol', () => {
     expect(ws.sent.some(m => m.event === 'clearAudio')).toBe(true);
   });
 
+  it('sends audio while synthesis is still running instead of after it', async () => {
+    const ws = fakeSocket();
+    const stream = new PlivoStream(ws, logger);
+
+    // A generator that reports what Plivo had been sent by the time each
+    // later chunk was produced - i.e. whether playback overlapped synthesis.
+    const sentWhenProduced = [];
+    async function* synth() {
+      for (let i = 0; i < 3; i++) {
+        sentWhenProduced.push(ws.sent.filter(m => m.event === 'playAudio').length);
+        yield Buffer.alloc(4000, SILENCE_BYTE);
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+
+    const firstAudioAt = [];
+    const id = await stream.playStream(synth(), {
+      text: 'a streamed sentence',
+      onFirstAudio: () => firstAudioAt.push(ws.sent.filter(m => m.event === 'playAudio').length)
+    });
+
+    // The second chunk was synthesised only after the first had already gone
+    // out. Buffering the whole sentence would leave these all at zero.
+    expect(sentWhenProduced).toEqual([0, 1, 2]);
+    // The very first frame is released without waiting to fill, so the caller
+    // is not held for a whole CHUNK_BYTES of synthesis.
+    expect(firstAudioAt).toEqual([1]);
+
+    const checkpoints = ws.sent.filter(m => m.event === 'checkpoint');
+    expect(checkpoints).toHaveLength(1);
+    expect(checkpoints[0].checkpoint.id).toBe(id);
+    expect(stream.queuedMs).toBe(1500); // 12000 bytes at 8 bytes/ms
+  });
+
+  it('reports a sentence cut mid-synthesis as dropped, not as heard', async () => {
+    const ws = fakeSocket();
+    const stream = new PlivoStream(ws, logger);
+    const controller = new AbortController();
+
+    async function* synth() {
+      yield Buffer.alloc(4000, SILENCE_BYTE);
+      // The candidate talks over her here.
+      controller.abort();
+      yield Buffer.alloc(4000, SILENCE_BYTE);
+    }
+
+    const id = await stream.playStream(synth(), {
+      text: 'interrupted sentence',
+      signal: controller.signal
+    });
+
+    // No checkpoint: none of it can be claimed as heard.
+    expect(id).toBeNull();
+    expect(ws.sent.some(m => m.event === 'checkpoint')).toBe(false);
+    expect(stream.queuedMs).toBe(0);
+  });
+
   it('survives an unparseable frame without tearing the call down', () => {
     const ws = fakeSocket();
     const stream = new PlivoStream(ws, logger);
@@ -238,6 +295,17 @@ describe('a closing line still plays after a tool ends the call', () => {
   class FakePlivo extends EventEmitter {
     constructor() { super(); this.spoken = []; }
     play(audio, text) { this.spoken.push(text); return `cp-${this.spoken.length}`; }
+    /** Mirrors the real streaming path: drain the synth, then checkpoint. */
+    async playStream(chunks, { text, signal } = {}) {
+      let queued = 0;
+      for await (const chunk of chunks) {
+        if (signal?.aborted) break;
+        queued += chunk.length;
+      }
+      if (!queued || signal?.aborted) return null;
+      this.spoken.push(text);
+      return `cp-${this.spoken.length}`;
+    }
     clear() { return { heard: '', dropped: '' }; }
     get queuedMs() { return 0; }
     close() {}
@@ -335,6 +403,106 @@ describe('a closing line still plays after a tool ends the call', () => {
     expect(cleared).toBe(true);
     expect(call.speaking).toBe(false);
     expect(plivo.spoken.length).toBeLessThan(3);
+  });
+
+  // An out-of-window or repeat caller used to be turned away before any call
+  // record existed, so the portal could not show the call had happened at all
+  // and InterviewCallStatus.out_of_window was never once produced.
+  it('records a call for a caller turned away outside the call window', async () => {
+    const db = await import('../src/db/index.js');
+    const { CallSession } = await import('../src/lib/callSession.js');
+    const { MockSTT, MockTTS } = await import('../src/audio/mockSpeech.js');
+    const { SessionManager } = await import('../src/lib/sessionManager.js');
+
+    const recorded = [];
+    const lookupSpy = vi.spyOn(db, 'lookupCandidateByPhone').mockResolvedValue({
+      candidate: { id: 'cand-1', name: 'Ananya' },
+      job: { id: 'job-1', title: 'QA', mustHaves: [], goodToHaves: [] },
+      tenant: { id: 'ten-1' },
+      approved: true,
+      hasCompleted: false,
+      // Closed: Monday only, 09:00-09:01, so any real "now" falls outside it.
+      callWindows: [{ days: [1], startTime: '09:00', endTime: '09:01', timezone: 'Asia/Kolkata' }],
+    });
+    const recordSpy = vi.spyOn(db, 'recordInterviewCall').mockImplementation(async (payload) => {
+      recorded.push(payload);
+      return { id: 'call-1' };
+    });
+    vi.spyOn(db, 'updateInterviewCall').mockResolvedValue({});
+
+    const session = new SessionManager().create('t-oow');
+    const plivo = new FakePlivo();
+
+    const call = new CallSession({
+      plivo, session, stt: new MockSTT(), tts: new MockTTS(), logger,
+      agent: { runTurn: async () => {} },
+      analyst: { analyse: async () => null },
+      config: { vad: {}, stt: {}, tts: { codec: 'mulaw' } },
+    });
+
+    await call.begin({ streamId: 's1', callUUID: 't-oow' });
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].candidateId).toBe('cand-1');
+    expect(session.outcome).toBe('out_of_window');
+    // She still tells them why rather than just hanging up.
+    expect(plivo.spoken.join(' ')).toMatch(/currently closed/);
+
+    lookupSpy.mockRestore();
+    recordSpy.mockRestore();
+    vi.restoreAllMocks();
+  });
+
+  // The other half of barge-in, which used to do nothing at all: interrupting
+  // her while she is still thinking. The check was `if (this.speaking)`, and
+  // during a model call that is false - so the candidate talked, was ignored,
+  // and then got answered a question they had already moved past.
+  it('cancels the model turn when the candidate talks over her thinking', async () => {
+    const { CallSession } = await import('../src/lib/callSession.js');
+    const { MockSTT, MockTTS } = await import('../src/audio/mockSpeech.js');
+    const { SessionManager } = await import('../src/lib/sessionManager.js');
+
+    const session = new SessionManager().create('t3');
+    const recorded = [];
+    session.transcript = { record: (kind) => recorded.push(kind), end: () => [] };
+
+    const plivo = new FakePlivo();
+    let signalSeen = null;
+
+    const call = new CallSession({
+      plivo, session, stt: new MockSTT(), tts: new MockTTS(), logger,
+      agent: {
+        // A model call that never returns on its own, and speaks nothing
+        // before it is cut off.
+        runTurn: async (s, speak, { signal } = {}) => {
+          signalSeen = signal;
+          await new Promise((resolve, reject) => {
+            signal?.addEventListener('abort', () => {
+              reject(Object.assign(new Error('Request was aborted.'), { name: 'APIUserAbortError' }));
+            }, { once: true });
+          });
+        }
+      },
+      analyst: { analyse: async () => null },
+      api: { startCall: async () => ({ id: 1 }), updateCall: async () => ({}), saveTranscript: async () => ({}), escalate: async () => ({}) },
+      config: { vad: {}, stt: {}, tts: { codec: 'mulaw' } }
+    });
+
+    await call.begin({ streamId: 's1', callUUID: 't3' });
+    plivo.spoken.length = 0; // drop the disclosure
+
+    // She is thinking, not speaking - the old condition for barge-in was false.
+    expect(call.turnRunning).toBe(true);
+    expect(call.speaking).toBe(false);
+
+    for (let i = 0; i < 5; i++) plivo.emit('audio', tone(12000));
+    await call.whenIdle();
+
+    expect(signalSeen?.aborted).toBe(true);
+    expect(recorded).toContain('turn.interrupted');
+    // An interruption is not a breakdown: she must not apologise for one.
+    expect(session.outcome).not.toBe('technical_failure');
+    expect(plivo.spoken.join(' ')).not.toMatch(/trouble on my end/);
   });
 });
 

@@ -47,6 +47,14 @@ export class CallSession {
     this.abort = null;
     this.turnRunning = false;
     this.currentTurn = null;
+    // Sentences arrive from the model faster than they can be spoken, so they
+    // queue here and play in the order they were written.
+    this.speechChain = Promise.resolve();
+    this.speechInFlight = 0;
+    // Set the moment the candidate stops talking, so the one latency that
+    // matters - their last word to her first sound - can be measured.
+    this.turnStartedAt = null;
+    this.turnAudioReported = false;
     // Everything the caller says while a turn is in flight is collected here
     // and answered together, rather than each utterance queueing a turn of
     // its own.
@@ -98,7 +106,15 @@ export class CallSession {
       if (Date.now() - this.lastVoiceAt > IDLE_HANGUP_MS) this.finalise(TERMINAL.ABANDONED);
     }, 5000);
 
+    // Both of the turn-aways below used to return before any call record was
+    // written, so an out-of-window or repeat caller left no trace at all - the
+    // portal could not show that the call had even happened, and the
+    // out_of_window status in the schema was never once produced. The candidate
+    // is known here, so the record is safe to attribute.
     if (lookup?.candidate && lookup.hasCompleted) {
+      this.#attachLookup(session, lookup);
+      session.recognised = true;
+      await this.#ensureInterviewCall(session);
       session.setState(STATES.CLOSE);
       session.finish(TERMINAL.ALREADY_INTERVIEWED);
       await this.#say("We already have a completed interview on file for this role. Thank you for calling, and the team will be in touch by email if needed.");
@@ -106,6 +122,11 @@ export class CallSession {
     }
 
     if (lookup && !isWithinCallWindow(lookup.callWindows)) {
+      if (lookup.candidate) {
+        this.#attachLookup(session, lookup);
+        session.recognised = true;
+        await this.#ensureInterviewCall(session);
+      }
       session.setState(STATES.CLOSE);
       session.finish(TERMINAL.OUT_OF_WINDOW);
       await this.#say("Thanks for calling. Our interview lines are currently closed. Please call back during the scheduled call window.");
@@ -187,7 +208,10 @@ export class CallSession {
     const event = this.vad.push(frame);
     if (event === 'speech-start') {
       this.lastVoiceAt = Date.now();
-      if (this.speaking) this.#bargeIn();
+      // Also while she is only thinking. The model turn is cancellable now, and
+      // a candidate who starts answering during the pause should not have to
+      // wait out a reply to a question they have already moved past.
+      if (this.speaking || this.turnRunning) this.#bargeIn();
     } else if (event === 'speech-end') {
       this.lastVoiceAt = Date.now();
     }
@@ -236,6 +260,8 @@ export class CallSession {
     if (!utterance) return;
 
     this.lastVoiceAt = Date.now();
+    this.turnStartedAt = Date.now();
+    this.turnAudioReported = false;
     this.session.transcript?.record('caller', { text: utterance, state: this.session.state });
 
     this.pending.push(utterance);
@@ -301,9 +327,20 @@ export class CallSession {
       session.history.push({ role: 'user', content: utterance });
     }
 
+    // One scope for the whole turn - the model call and every sentence it
+    // produces - so a barge-in cancels all of it with a single abort.
+    const abort = new AbortController();
+    this.abort = abort;
+
     try {
-      await this.agent.runTurn(session, (text) => this.#say(text));
+      await this.agent.runTurn(session, (text) => this.#say(text), { signal: abort.signal });
     } catch (err) {
+      if (abort.signal.aborted || isAbortError(err)) {
+        // The candidate talked over her. Not a failure: what they said is
+        // already queued, and the next turn answers it.
+        session.transcript?.record('turn.interrupted', { state: session.state });
+        return;
+      }
       session.transcript?.record('model.error', { source: 'anthropic', error: err.message, status: err.status });
       this.logger.error({ sessionId: session.id, err }, 'Model turn failed');
       await this.#fail('the assistant could not continue');
@@ -315,46 +352,86 @@ export class CallSession {
     }
   }
 
-  async #say(text, { isDisclosure = false } = {}) {
+  /**
+   * Speak one piece of a reply, and resolve with what actually reached the
+   * caller.
+   *
+   * Calls queue: a sentence handed over while an earlier one is still playing
+   * waits its turn, so the caller hears them in the order the model wrote
+   * them. That queue is what lets the model turn stream - it hands each
+   * finished sentence over and goes straight back to reading tokens instead of
+   * waiting out the playback.
+   */
+  #say(text, { isDisclosure = false } = {}) {
     const spoken = toSpeech(text);
-    if (!spoken) return '';
+    if (!spoken) return Promise.resolve('');
 
     const sentences = splitSentences(spoken);
-    if (!sentences.length) return '';
+    if (!sentences.length) return Promise.resolve('');
 
-    this.abort = new AbortController();
+    // Outside a turn - the opening disclosure, the apology after a failure -
+    // there is no scope to join, so this piece gets one of its own.
+    if (!this.abort || this.abort.signal.aborted) this.abort = new AbortController();
+    const signal = this.abort.signal;
+
+    // Only on the transition into speech. Resetting per sentence would wipe a
+    // barge-in that was still accumulating across the boundary, and with the
+    // model streaming those boundaries now land mid-reply.
+    if (this.speechInFlight === 0) this.vad.reset();
+    this.speechInFlight++;
     this.speaking = true;
-    this.vad.reset();
 
+    const run = this.speechChain.then(() => this.#play(sentences, signal, isDisclosure));
+
+    // The chain has to survive a failed piece, or one bad sentence silently
+    // drops every sentence queued behind it.
+    this.speechChain = run.then(() => {}, () => {});
+
+    return run
+      .catch((err) => {
+        this.logger.error({ err: err.message }, 'Synthesis failed');
+        this.session.transcript?.record('model.error', { source: 'tts', error: err.message });
+        return '';
+      })
+      .finally(() => {
+        if (--this.speechInFlight === 0) this.speaking = false;
+      });
+  }
+
+  /** Synthesise and play sentences in order. Returns the ones that got out. */
+  async #play(sentences, signal, isDisclosure) {
     const started = Date.now();
-    let first = true;
+    const said = [];
 
-    try {
-      for (const sentence of sentences) {
-        if (this.abort.signal.aborted) break;
+    for (const sentence of sentences) {
+      if (signal.aborted) break;
 
-        const chunks = [];
-        for await (const chunk of this.tts.stream(sentence, this.abort.signal)) chunks.push(chunk);
-        if (this.abort.signal.aborted || !chunks.length) break;
+      const checkpoint = await this.plivo.playStream(this.tts.stream(sentence, signal), {
+        text: sentence,
+        signal,
+        onFirstAudio: () => this.#onFirstAudio(started)
+      });
+      if (signal.aborted || !checkpoint) break;
 
-        const checkpoint = this.plivo.play(Buffer.concat(chunks), sentence);
-        if (isDisclosure) this.disclosureCheckpoint = checkpoint;
-
-        if (first) {
-          this.session.transcript?.record('tts.first_audio', { latencyMs: Date.now() - started });
-          first = false;
-        }
-      }
-    } catch (err) {
-      this.logger.error({ err: err.message }, 'Synthesis failed');
-      this.session.transcript?.record('model.error', { source: 'tts', error: err.message });
-      this.speaking = false;
-      return '';
+      if (isDisclosure) this.disclosureCheckpoint = checkpoint;
+      said.push(sentence);
     }
 
-    this.speaking = false;
-    this.session.transcript?.record('pratibha', { text: spoken });
+    const spoken = said.join(' ');
+    if (spoken) this.session.transcript?.record('pratibha', { text: spoken });
     return spoken;
+  }
+
+  #onFirstAudio(startedAt) {
+    this.session.transcript?.record('tts.first_audio', { latencyMs: Date.now() - startedAt });
+
+    // The number the candidate actually experiences: their last word to her
+    // first sound, across endpointing, the model and synthesis together.
+    // Nothing measured this end to end before.
+    if (this.turnStartedAt && !this.turnAudioReported) {
+      this.turnAudioReported = true;
+      this.session.transcript?.record('turn.first_audio', { latencyMs: Date.now() - this.turnStartedAt });
+    }
   }
 
   /**
@@ -477,6 +554,16 @@ export class CallSession {
       interviewCallId: session.interviewCallId
     }, 'Call finalised');
   }
+}
+
+/**
+ * An aborted request, however the SDK or the runtime chose to spell it. A
+ * barge-in cancels the model call, and that must not be reported to the
+ * candidate as a technical failure.
+ */
+export function isAbortError(err) {
+  const name = err?.name ?? '';
+  return name === 'AbortError' || name === 'APIUserAbortError' || err?.code === 'ABORT_ERR';
 }
 
 export function deriveCriteria(job) {

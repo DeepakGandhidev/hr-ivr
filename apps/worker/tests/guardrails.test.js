@@ -441,6 +441,26 @@ describe('Plivo answer document', () => {
   });
 });
 
+/**
+ * Stand-in for the SDK's MessageStream: text arrives as deltas, and the
+ * assembled message (tool calls, usage, stop reason) comes off finalMessage.
+ * `gate` lets a test hold the stream open mid-reply.
+ */
+function fakeStream(message, { gate } = {}) {
+  const text = message.content.filter(c => c.type === 'text').map(c => c.text).join('');
+  // Split after each space so a delta lands mid-sentence, as a real one does.
+  const deltas = text.length ? text.split(/(?<= )/) : [];
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const piece of deltas) {
+        if (gate) await gate(piece);
+        yield { type: 'content_block_delta', delta: { type: 'text_delta', text: piece } };
+      }
+    },
+    finalMessage: async () => message,
+  };
+}
+
 // The dead-air filler exists so a silent model never leaves a live call in silence.
 describe('dead-air filler only covers real silence', () => {
   it('stays quiet when the turn already spoke before ending the call', async () => {
@@ -457,13 +477,15 @@ describe('dead-air filler only covers real silence', () => {
       ], stop_reason: 'tool_use' },
       { content: [], stop_reason: 'end_turn' }
     ];
-    agent.anthropic = { messages: { create: async () => replies.shift() } };
+    agent.anthropic = { messages: { stream: () => fakeStream(replies.shift()) } };
 
     const said = [];
     await agent.runTurn(session, async (text) => { said.push(text); return text; });
 
-    expect(said).toHaveLength(1);
-    expect(said[0]).toMatch(/Thanks for your time/);
+    // Streamed, so the reply arrives as sentences rather than one block. What
+    // matters is that all of it was spoken and the filler stayed away.
+    expect(said.join(' ')).toMatch(/Thanks for your time/);
+    expect(said.join(' ')).toMatch(/in touch by email/);
     expect(said.join(' ')).not.toMatch(/didn't quite catch/);
   });
 
@@ -472,13 +494,73 @@ describe('dead-air filler only covers real silence', () => {
 
     const { tools, session } = harness();
     const agent = new ScreeningAgent(config, logger, tools);
-    agent.anthropic = { messages: { create: async () => ({ content: [], stop_reason: 'end_turn' }) } };
+    agent.anthropic = { messages: { stream: () => fakeStream({ content: [], stop_reason: 'end_turn' }) } };
 
     const said = [];
     await agent.runTurn(session, async (text) => { said.push(text); return text; });
 
     expect(said).toHaveLength(1);
     expect(said[0]).toMatch(/didn't quite catch/);
+  });
+});
+
+/**
+ * The whole point of streaming the turn: the candidate starts hearing the
+ * answer while the model is still writing it. Collecting the reply first put
+ * the entire generation time into dead air on every single turn.
+ */
+describe('the reply is spoken while the model is still writing it', () => {
+  it('hands over each sentence before the model has finished the next', async () => {
+    const { ScreeningAgent } = await import('../src/lib/screening.js');
+    const { tools, session } = harness();
+    const agent = new ScreeningAgent(config, logger, tools);
+
+    const reply = 'Thanks for confirming. Tell me about your last role. What did you own there?';
+    const said = [];
+    const writtenWhenSpoken = [];
+    let written = 0;
+
+    agent.anthropic = { messages: { stream: () => fakeStream(
+      { content: [{ type: 'text', text: reply }], stop_reason: 'end_turn' },
+      { gate: async (piece) => { written += piece.length; await Promise.resolve(); } }
+    ) } };
+
+    await agent.runTurn(session, async (text) => {
+      // How much of the reply the model had produced at the moment this
+      // sentence was handed over.
+      writtenWhenSpoken.push(written);
+      said.push(text);
+      return text;
+    });
+
+    expect(said).toHaveLength(3);
+    expect(said[0]).toBe('Thanks for confirming.');
+
+    // The first sentence went out before the model had written the whole reply.
+    // Buffering would put every one of these at reply.length.
+    expect(writtenWhenSpoken[0]).toBeLessThan(reply.length);
+    expect(writtenWhenSpoken[0]).toBeLessThan(writtenWhenSpoken[2]);
+
+    // One turn is still one question and one history entry, however many
+    // sentences it was streamed as.
+    const assistant = session.history.filter(m => m.role === 'assistant');
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0].content).toBe(reply);
+  });
+
+  it('does not apologise for silence when the candidate cut her off', async () => {
+    const { ScreeningAgent } = await import('../src/lib/screening.js');
+    const { tools, session } = harness();
+    const agent = new ScreeningAgent(config, logger, tools);
+
+    agent.anthropic = { messages: { stream: () => fakeStream({ content: [], stop_reason: 'end_turn' }) } };
+
+    const said = [];
+    const controller = new AbortController();
+    controller.abort();
+    await agent.runTurn(session, async (text) => { said.push(text); return text; }, { signal: controller.signal });
+
+    expect(said).toEqual([]);
   });
 });
 

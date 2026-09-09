@@ -109,6 +109,17 @@ class FakePlivo extends EventEmitter {
     setImmediate(() => this.emit('played', { id, text }));
     return id;
   }
+
+  /** The streaming path CallSession actually uses. */
+  async playStream(chunks, { text, signal } = {}) {
+    let queued = 0;
+    for await (const chunk of chunks) {
+      if (signal?.aborted) break;
+      queued += chunk.length;
+    }
+    if (!queued || signal?.aborted) return null;
+    return this.play(null, text);
+  }
   clear() {
     const heard = this.played.join(' ');
     this.played = [];

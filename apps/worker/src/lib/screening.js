@@ -2,6 +2,7 @@ import { Anthropic } from '@anthropic-ai/sdk';
 import { v4 as uuidv4 } from 'uuid';
 import { STATES, TERMINAL } from './states.js';
 import { samplingFor, thinkingFor } from './sampling.js';
+import { splitSentences, takeSentences } from '../utils/speech.js';
 import { cvList } from './cv.js';
 
 // Turns kept per call. A screening runs six to ten questions, and a candidate
@@ -235,7 +236,19 @@ TOOLS AVAILABLE TO YOU RIGHT NOW: ${this.tools.definitionsFor(session.state).map
     return parts.join('\n\n');
   }
 
-  async runTurn(session, speak, depth = 0, spokenSoFar = false) {
+  /**
+   * One model turn, streamed.
+   *
+   * The reply is not waited for as a whole. Each sentence goes to `speak` the
+   * instant the model finishes writing it, so synthesis and playback overlap
+   * the rest of the generation - the candidate hears the opening line while the
+   * model is still deciding how the answer ends. Waiting for the complete
+   * response first put the entire generation time into dead air on every turn.
+   *
+   * `speak` queues internally, so handing a sentence over never blocks reading
+   * the next token off the wire.
+   */
+  async runTurn(session, speak, { depth = 0, spokenSoFar = false, signal } = {}) {
     const state = session.state;
     const tools = this.tools.definitionsFor(state);
 
@@ -244,7 +257,24 @@ TOOLS AVAILABLE TO YOU RIGHT NOW: ${this.tools.definitionsFor(session.state).map
     });
 
     const started = Date.now();
-    const response = await this.anthropic.messages.create({
+    let firstTokenAt = null;
+    let buffer = '';
+    const speaking = [];
+
+    // `final` also releases the tail, which by definition has no terminator
+    // after it - the model stopped writing rather than ended a sentence.
+    const release = (final) => {
+      const { sentences, rest } = takeSentences(buffer);
+      buffer = rest;
+      const out = [...sentences];
+      if (final && buffer.trim()) {
+        out.push(...splitSentences(buffer));
+        buffer = '';
+      }
+      for (const sentence of out) speaking.push(speak(sentence));
+    };
+
+    const stream = this.anthropic.messages.stream({
       model: this.config.anthropic.model,
       max_tokens: 600,
       ...samplingFor(this.config.anthropic.model, 0.3),
@@ -253,36 +283,55 @@ TOOLS AVAILABLE TO YOU RIGHT NOW: ${this.tools.definitionsFor(session.state).map
       messages: this.buildMessages(session),
       ...(tools.length ? { tools } : {}),
       tool_choice: { type: 'auto', disable_parallel_tool_use: true }
-    });
+    }, signal ? { signal } : undefined);
 
-    // Track usage for cost attribution on every turn.
+    for await (const event of stream) {
+      if (event.type !== 'content_block_delta' || event.delta?.type !== 'text_delta') continue;
+      if (firstTokenAt === null) {
+        firstTokenAt = Date.now();
+        // The only figure that says whether the model is the thing keeping the
+        // candidate waiting, as opposed to synthesis or the network.
+        session.transcript?.record('model.first_token', { latencyMs: firstTokenAt - started });
+      }
+      buffer += event.delta.text;
+      release(false);
+    }
+
+    // Tool calls, usage and stop_reason come off the assembled message; only
+    // the text needed to be read early.
+    const response = await stream.finalMessage();
+    release(true);
+
+    // Whatever is still playing has to finish before the turn moves on, or a
+    // tool result lands while she is mid-sentence.
+    const said = (await Promise.all(speaking)).filter(Boolean);
+    const reply = said.join(' ').trim();
+
     const usage = response.usage ?? {};
     if (usage.input_tokens) session.llmInputTokens += usage.input_tokens;
     if (usage.output_tokens) session.llmOutputTokens += usage.output_tokens;
 
     session.transcript?.record('model.response', {
       latencyMs: Date.now() - started,
+      firstTokenMs: firstTokenAt ? firstTokenAt - started : null,
       blocks: response.content.map(c => c.type).join(',') || 'empty',
       stopReason: response.stop_reason,
       inputTokens: usage.input_tokens ?? 0,
       outputTokens: usage.output_tokens ?? 0,
     });
 
+    // One history entry and one question for the whole reply, however many
+    // sentences it was streamed as. Counting per sentence would have a single
+    // five-sentence question read as five questions asked, and end the
+    // interview a third of the way in.
     let spoke = false;
-    let toolUse = null;
-
-    for (const content of response.content) {
-      if (content.type === 'text') {
-        const said = await speak(content.text);
-        if (said) {
-          session.history.push({ role: 'assistant', content: said });
-          spoke = true;
-          if (session.state === STATES.SCREEN) session.questionsAsked++;
-        }
-      } else if (content.type === 'tool_use' && !toolUse) {
-        toolUse = content;
-      }
+    if (reply) {
+      session.history.push({ role: 'assistant', content: reply });
+      spoke = true;
+      if (session.state === STATES.SCREEN) session.questionsAsked++;
     }
+
+    const toolUse = response.content.find(c => c.type === 'tool_use') ?? null;
 
     if (toolUse) {
       const ran = await this.executeTool(session, toolUse);
@@ -290,13 +339,13 @@ TOOLS AVAILABLE TO YOU RIGHT NOW: ${this.tools.definitionsFor(session.state).map
 
       if (session.ended) {
         if (!spoke && depth + 1 < MAX_TOOL_CHAIN) {
-          await this.runTurn(session, speak, depth + 1, spoke || spokenSoFar);
+          await this.runTurn(session, speak, { depth: depth + 1, spokenSoFar: spoke || spokenSoFar, signal });
         }
         return;
       }
 
       if (depth + 1 < MAX_TOOL_CHAIN) {
-        await this.runTurn(session, speak, depth + 1, spoke || spokenSoFar);
+        await this.runTurn(session, speak, { depth: depth + 1, spokenSoFar: spoke || spokenSoFar, signal });
         return;
       }
 
@@ -307,7 +356,9 @@ TOOLS AVAILABLE TO YOU RIGHT NOW: ${this.tools.definitionsFor(session.state).map
       return;
     }
 
-    if (!spoke && !spokenSoFar && !session.ended) {
+    // Never after a barge-in: the candidate cut her off deliberately, and
+    // answering that with "sorry, I did not catch that" is worse than silence.
+    if (!spoke && !spokenSoFar && !session.ended && !signal?.aborted) {
       session.transcript?.record('model.silent', { state, stopReason: response.stop_reason });
       this.logger.warn({ sessionId: session.id, state }, 'Model returned nothing to say');
       await speak("Sorry, I didn't quite catch that. Could you say it again?");

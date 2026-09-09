@@ -111,6 +111,24 @@ export class PlivoStream extends EventEmitter {
     return true;
   }
 
+  /** One playAudio frame. Both playback paths go through here so they cannot drift. */
+  #sendAudio(audio) {
+    return this.#send({
+      event: 'playAudio',
+      media: {
+        contentType: 'audio/x-mulaw',
+        sampleRate: 8000,
+        payload: audio.toString('base64')
+      }
+    });
+  }
+
+  /** Forget a segment that never made it to the caller. */
+  #drop(segment) {
+    const index = this.pending.indexOf(segment);
+    if (index !== -1) this.pending.splice(index, 1);
+  }
+
   /**
    * Queue one segment of speech and mark its end with a checkpoint.
    * `text` is what this audio says, so a later ack can report what was heard.
@@ -119,21 +137,79 @@ export class PlivoStream extends EventEmitter {
     if (!audio?.length) return null;
 
     for (let offset = 0; offset < audio.length; offset += CHUNK_BYTES) {
-      const sent = this.#send({
-        event: 'playAudio',
-        media: {
-          contentType: 'audio/x-mulaw',
-          sampleRate: 8000,
-          payload: audio.subarray(offset, offset + CHUNK_BYTES).toString('base64')
-        }
-      });
-      if (!sent) return null;
+      if (!this.#sendAudio(audio.subarray(offset, offset + CHUNK_BYTES))) return null;
     }
 
     const id = uuidv4();
     this.pending.push({ id, text, durationMs: Math.round(audio.length / 8) });
     this.#send({ event: 'checkpoint', checkpoint: { id } });
     return id;
+  }
+
+  /**
+   * The same segment, but fed from synthesis as it arrives instead of from a
+   * finished buffer.
+   *
+   * `play` cannot be called until the whole sentence has been synthesised, so
+   * the vendor's synthesis time sits in front of the first byte the caller
+   * hears - dead air on every turn, growing with the length of the sentence.
+   * This sends each frame the moment it is full, so playback overlaps
+   * synthesis and only the first frame waits on the vendor.
+   *
+   * The segment joins `pending` up front rather than at the checkpoint. A
+   * barge-in landing mid-synthesis has to be able to report this text as
+   * dropped; queued only at the end it would be neither heard nor dropped, and
+   * the history would claim Pratibha said something the caller never got.
+   *
+   * Returns the checkpoint id, or null when nothing reached the caller.
+   */
+  async playStream(chunks, { text = '', signal, onFirstAudio } = {}) {
+    const segment = { id: uuidv4(), text, durationMs: 0 };
+    this.pending.push(segment);
+
+    let carry = Buffer.alloc(0);
+    let queued = 0;
+    let open = true;
+
+    // `all` releases a partial frame too: true for the first chunk, so the
+    // caller hears something without waiting for a full 500 ms to accumulate,
+    // and true again at the end to flush the tail.
+    const emit = (all) => {
+      while (open && (carry.length >= CHUNK_BYTES || (all && carry.length))) {
+        const take = Math.min(CHUNK_BYTES, carry.length);
+        open = this.#sendAudio(carry.subarray(0, take));
+        if (!open) break;
+        carry = carry.subarray(take);
+        queued += take;
+        // Kept current rather than set at the end, so `queuedMs` is honest
+        // about audio already in flight while the sentence is still arriving.
+        segment.durationMs = Math.round(queued / 8);
+      }
+    };
+
+    try {
+      for await (const chunk of chunks) {
+        if (signal?.aborted || !open) break;
+        carry = carry.length ? Buffer.concat([carry, chunk]) : chunk;
+        const first = queued === 0;
+        emit(first);
+        if (first && queued > 0) onFirstAudio?.();
+      }
+      if (!signal?.aborted) emit(true);
+    } catch (err) {
+      this.#drop(segment);
+      throw err;
+    }
+
+    // A barge-in during synthesis has already cleared the queue, so this
+    // segment is no longer ours to checkpoint.
+    if (!queued || signal?.aborted || !this.pending.includes(segment)) {
+      this.#drop(segment);
+      return null;
+    }
+
+    this.#send({ event: 'checkpoint', checkpoint: { id: segment.id } });
+    return segment.id;
   }
 
   /**

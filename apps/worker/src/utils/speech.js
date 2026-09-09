@@ -80,3 +80,46 @@ export function splitSentences(text, maxChars = 220) {
   }
   return out;
 }
+
+/**
+ * Pull every finished sentence out of a buffer that is still growing, leaving
+ * the unfinished tail behind.
+ *
+ * This is what lets synthesis start while the model is still writing: a
+ * sentence goes to the vendor the moment it is complete rather than the whole
+ * reply waiting on the last token. The tail comes back raw - never through
+ * toSpeech - because the next delta is appended straight onto it, and
+ * normalising it early would eat the space between two words.
+ */
+export function takeSentences(buffer, maxChars = 220) {
+  // A terminator only ends a sentence when whitespace follows it. Without that
+  // rule the model writing "3." ends a sentence every time it says a decimal,
+  // and half a number gets spoken on its own.
+  const boundary = /[.!?]["'\u201D\u2019)\]]*\s/g;
+  let cut = 0;
+  let match;
+
+  while ((match = boundary.exec(buffer))) {
+    const end = match.index + match[0].length;
+    const head = buffer.slice(0, end).trimEnd();
+    // The same false breaks splitSentences guards against. They matter more
+    // here: the text that would disprove them has not been written yet.
+    if (ABBREVIATIONS.test(head) || /\d\.$/.test(head)) continue;
+    cut = end;
+  }
+
+  if (cut) return { sentences: splitSentences(buffer.slice(0, cut)), rest: buffer.slice(cut) };
+
+  // No sentence has ended yet, but a long enough clause still has to start
+  // playing or a rambling opening line puts the caller back into silence for
+  // the whole time it takes to write.
+  if (buffer.length >= maxChars) {
+    const window = buffer.slice(0, maxChars);
+    const at = Math.max(window.lastIndexOf(', '), window.lastIndexOf('; '), window.lastIndexOf(' '));
+    if (at > maxChars * 0.4) {
+      return { sentences: splitSentences(buffer.slice(0, at + 1)), rest: buffer.slice(at + 1) };
+    }
+  }
+
+  return { sentences: [], rest: buffer };
+}

@@ -32,6 +32,12 @@ if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.__adminPrisma = adminPrisma;
 }
 
+/** How long one request-path transaction may run before Postgres gives up on it. */
+const TRANSACTION_TIMEOUT_MS = Number(process.env.PRISMA_TRANSACTION_TIMEOUT_MS) || 20_000;
+
+/** How long to wait for a free connection before failing fast. */
+const TRANSACTION_MAX_WAIT_MS = Number(process.env.PRISMA_TRANSACTION_MAX_WAIT_MS) || 5_000;
+
 /**
  * Run a callback inside a transaction that sets the Postgres `app.current_tenant`
  * setting, so the row-level security policies scope every query to one tenant.
@@ -42,10 +48,23 @@ if (process.env.NODE_ENV !== 'production') {
  * injection point, and this one sits on the tenant-isolation boundary.
  */
 export async function withTenant(tenantId, cb) {
-  return prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT set_config('app.current_tenant', ${tenantId}, true)`;
-    return cb(tx);
-  });
+  return prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_tenant', ${tenantId}, true)`;
+      return cb(tx);
+    },
+    // Prisma's default interactive-transaction timeout is 5s, and production
+    // has already thrown P2028 at 5530ms. The tenant setting is transaction-
+    // local, so every request-path read has to live inside one of these - and
+    // queries in an interactive transaction share a single connection, which
+    // means a Promise.all inside it does not run in parallel, it queues. A
+    // read assembling a page from a dozen queries therefore pays a dozen
+    // serialised round trips and brushes the ceiling on a small box.
+    //
+    // Raised rather than removed: an unbounded transaction holds a connection
+    // until the pool starves, which is a worse failure than a slow page.
+    { timeout: TRANSACTION_TIMEOUT_MS, maxWait: TRANSACTION_MAX_WAIT_MS }
+  );
 }
 
 export { PrismaClient };

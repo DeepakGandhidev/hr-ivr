@@ -513,3 +513,171 @@ a.stat:hover { border-color: var(--border-strong); text-decoration: none; box-sh
   .nav-section { display: none; }
   .content { padding: 20px 16px; }
 }
+
+/* ==========================================================================
+   Brand tokens — from the client's reference design (pratibha-dashboard.html).
+   Taken verbatim; these are the palette, not a starting point for one.
+
+   Added alongside the existing semantic tokens rather than replacing them.
+   Remapping --bg/--surface/--accent would restyle all fifteen other pages at
+   once, which is not what was asked for and could not be visually checked.
+   Rolling the brand across the rest of the app is a deliberate follow-up.
+   ========================================================================== */
+:root {
+  --ivory: #FAF9F6;
+  --paper: #FFFFFF;
+  --indigo: #1E1B4B;
+  --indigo-2: #2A2666;
+  --indigo-3: #3A3670;
+  --saffron: #F59E0B;
+  --saffron-d: #B45309;
+  --saffron-bg: #FFF4E0;
+  --violet: #8B5CF6;
+  --ink: #23213F;
+  --brand-muted: #6B688A;
+  --line: #E6E3DA;
+  --line-2: #EFEDE6;
+  --brand-green: #166534;
+  --green-bg: #E7F4EA;
+  --brand-red: #9F1239;
+  --red-bg: #FCE9EE;
+  --disp: 'Bricolage Grotesque', Georgia, serif;
+  --body-font: 'Public Sans', system-ui, sans-serif;
+}
+
+/* The reference is a light design and the app ships a dark toggle. Rather than
+   leave the dashboard unreadable for anyone using it, the surfaces and lines
+   invert while the brand hues — indigo, saffron — are held. */
+:root[data-theme="dark"] {
+  --ivory: #131218;
+  --paper: #1B1A22;
+  --ink: #ECEAF6;
+  --brand-muted: #9C99B8;
+  --line: #2E2C3A;
+  --line-2: #26242F;
+  --saffron-bg: #33270E;
+  --green-bg: #10281A;
+  --red-bg: #2C1119;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ivory: #131218;
+    --paper: #1B1A22;
+    --ink: #ECEAF6;
+    --brand-muted: #9C99B8;
+    --line: #2E2C3A;
+    --line-2: #26242F;
+    --saffron-bg: #33270E;
+    --green-bg: #10281A;
+    --red-bg: #2C1119;
+  }
+}
+
+/* --- dashboard ------------------------------------------------------------
+   Scoped under .dash so none of it leaks into the pages that still use the
+   original tokens. */
+.dash { font-family: var(--body-font); color: var(--ink); }
+.dash h1, .dash h2, .dash h3 {
+  font-family: var(--disp);
+  color: var(--indigo);
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+:root[data-theme="dark"] .dash h1,
+:root[data-theme="dark"] .dash h2,
+:root[data-theme="dark"] .dash h3 { color: var(--ink); }
+
+.dash-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 22px; flex-wrap: wrap; }
+.dash-top h1 { font-size: 30px; font-weight: 700; }
+.dash-top .sub { color: var(--brand-muted); margin-top: 4px; font-size: 14px; }
+
+.dash .btn-saffron { background: var(--saffron); color: #3B2A05; border: none; border-radius: 10px; padding: 10px 16px; font-weight: 600; font-size: 13.5px; }
+.dash .btn-sm { padding: 7px 12px; font-size: 12.5px; border-radius: 8px; }
+
+/* Live strip */
+.live { display: flex; align-items: center; gap: 14px; background: var(--indigo); color: #fff; border-radius: 14px; padding: 14px 18px; margin-bottom: 22px; flex-wrap: wrap; }
+.live .pulse { width: 10px; height: 10px; border-radius: 50%; background: var(--saffron); box-shadow: 0 0 0 4px rgb(245 158 11 / 0.25); flex: none; }
+.live b { font-family: var(--disp); font-weight: 600; font-size: 15px; }
+.live .live-sub { color: #B9B5E0; font-size: 13px; }
+.live .right { margin-left: auto; display: flex; gap: 22px; font-size: 13px; color: #B9B5E0; flex-wrap: wrap; }
+.live .right b { color: #fff; font-size: 14px; }
+
+.sec-h { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 12px; gap: 12px; }
+.sec-h h2 { font-size: 18px; font-weight: 600; }
+.sec-h a { font-size: 13px; color: var(--brand-muted); }
+
+/* Needs-you */
+.needs { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 26px; }
+.need { background: var(--paper); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 6px; }
+.need.hot { border-color: var(--saffron); background: var(--saffron-bg); }
+.need .k { font-family: var(--disp); font-size: 34px; font-weight: 800; color: var(--indigo); line-height: 1; }
+:root[data-theme="dark"] .need .k { color: var(--saffron); }
+.need .t { font-size: 14px; font-weight: 600; color: var(--indigo); }
+:root[data-theme="dark"] .need .t { color: var(--ink); }
+.need .d { font-size: 12.5px; color: var(--brand-muted); flex: 1; }
+.need .btn, .need .btn-saffron { align-self: flex-start; margin-top: 8px; }
+.need.ok .k { color: var(--brand-green); font-size: 22px; margin-top: 6px; }
+
+/* Funnel */
+.funnel { background: var(--paper); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; margin-bottom: 26px; }
+.funnel-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0; margin-top: 12px; }
+.stage { padding: 0 14px 0 0; }
+.stage + .stage { padding-left: 18px; border-left: 1px dashed var(--line); }
+.stage .k { font-family: var(--disp); font-size: 26px; font-weight: 700; color: var(--indigo); line-height: 1; }
+:root[data-theme="dark"] .stage .k { color: var(--ink); }
+.stage .t { font-size: 12.5px; color: var(--brand-muted); margin-top: 4px; }
+.stage .bar { height: 6px; border-radius: 99px; background: var(--line-2); margin-top: 10px; overflow: hidden; }
+.stage .bar i { display: block; height: 100%; background: var(--indigo); border-radius: 99px; }
+:root[data-theme="dark"] .stage .bar i { background: var(--violet); }
+.stage.gate .bar i { background: var(--saffron); }
+.stage.gate .t { color: var(--saffron-d); font-weight: 600; }
+:root[data-theme="dark"] .stage.gate .t { color: var(--saffron); }
+
+/* Cards / tables */
+.dash-grid { display: grid; grid-template-columns: 1.55fr 1fr; gap: 18px; margin-bottom: 22px; }
+@media (max-width: 1100px) { .dash-grid { grid-template-columns: 1fr; } }
+.dash .card { background: var(--paper); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+.dash .card h2 { font-size: 17px; font-weight: 600; margin-bottom: 12px; }
+.dash table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.dash th { text-align: left; font-size: 11.5px; font-weight: 600; letter-spacing: .05em; color: var(--brand-muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.dash td { padding: 11px 8px; border-bottom: 1px solid var(--line-2); vertical-align: middle; }
+.dash tr:last-child td { border-bottom: none; }
+.dash td.role { font-weight: 600; color: var(--indigo); }
+:root[data-theme="dark"] .dash td.role { color: var(--ink); }
+.dash td.role small { display: block; font-weight: 400; color: var(--brand-muted); font-size: 12px; }
+
+.pill { display: inline-block; font-size: 12px; font-weight: 600; border-radius: 99px; padding: 3px 10px; }
+.pill.gate { background: var(--saffron-bg); color: var(--saffron-d); }
+.pill.ok { background: var(--green-bg); color: var(--brand-green); }
+.pill.mute { background: var(--line-2); color: var(--brand-muted); }
+.pill.bad { background: var(--red-bg); color: var(--brand-red); }
+:root[data-theme="dark"] .pill.ok { color: #86EFAC; }
+:root[data-theme="dark"] .pill.gate { color: var(--saffron); }
+:root[data-theme="dark"] .pill.bad { color: #FDA4AF; }
+
+.score { font-family: var(--disp); font-weight: 700; color: var(--indigo); }
+:root[data-theme="dark"] .score { color: var(--ink); }
+.score.hi { color: var(--brand-green); }
+:root[data-theme="dark"] .score.hi { color: #86EFAC; }
+.rowbtn { background: none; border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; font-size: 12.5px; color: var(--indigo); font-weight: 600; }
+:root[data-theme="dark"] .rowbtn { color: var(--ink); }
+.rowbtn.pri { background: var(--saffron); border-color: var(--saffron); color: #3B2A05; }
+
+/* Activity feed */
+.feed { display: flex; flex-direction: column; }
+.ev { display: grid; grid-template-columns: 52px 1fr; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line-2); font-size: 13.5px; }
+.ev:last-child { border-bottom: none; }
+.ev time { font-size: 12px; color: var(--brand-muted); padding-top: 2px; }
+.ev b { font-weight: 600; color: var(--indigo); }
+:root[data-theme="dark"] .ev b { color: var(--ink); }
+.ev span { color: var(--brand-muted); }
+.mail { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; margin-top: 6px; }
+.mail b { font-weight: 600; color: var(--indigo); display: block; font-size: 13.5px; }
+:root[data-theme="dark"] .mail b { color: var(--ink); }
+.mail span { font-size: 12px; color: var(--brand-muted); }
+
+/* Sidebar quota meters */
+.usage-meter { margin-top: 12px; font-size: 12px; color: var(--text-muted); padding: 0 4px; }
+.usage-meter .track { height: 5px; background: var(--border); border-radius: 99px; margin: 6px 0 10px; overflow: hidden; }
+.usage-meter .fill { height: 100%; background: var(--saffron); border-radius: 99px; }
+.usage-meter .val { float: right; font-weight: 600; color: var(--text); }

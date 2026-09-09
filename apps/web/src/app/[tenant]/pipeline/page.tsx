@@ -113,7 +113,11 @@ export default function PipelinePage({ params }: { params: { tenant: string } })
               {visible.map((c) => (
                 <tr key={c.id}>
                   <td>
-                    <div style={{ fontWeight: 550 }}>{c.name ?? <span style={{ color: "var(--danger)" }}>Could not parse</span>}</div>
+                    <div style={{ fontWeight: 550 }}>
+                      <Link href={`/${tenant}/candidates/${c.id}`} style={{ color: "inherit" }}>
+                        {c.name ?? <span style={{ color: "var(--danger)" }}>Could not parse</span>}
+                      </Link>
+                    </div>
                     <div className="subtle">{c.email ?? "no email"}</div>
                   </td>
                   <td>

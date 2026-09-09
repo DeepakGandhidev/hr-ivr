@@ -39,7 +39,7 @@ export async function PUT(
       const jobId = parsed.data.jobId ?? null;
 
       if (jobId) {
-        const job = await tx.job.findUnique({ where: { id: jobId } });
+        const job = await tx.job.findFirst({ where: { id: jobId, deletedAt: null } });
         if (!job) {
           throw new ValidationError("Job not found", { jobId });
         }

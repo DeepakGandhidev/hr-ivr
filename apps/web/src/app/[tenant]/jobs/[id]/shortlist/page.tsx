@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 interface Screening {
@@ -61,6 +62,7 @@ interface SendResult {
 }
 
 export default function ShortlistPage({ params }: { params: { tenant: string; id: string } }) {
+  const router = useRouter();
   const { tenant, id } = params;
   const [shortlist, setShortlist] = useState<Shortlist | null>(null);
   const [shortlists, setShortlists] = useState<Shortlist[]>([]);
@@ -153,6 +155,9 @@ export default function ShortlistPage({ params }: { params: { tenant: string; id
     // Re-read rather than patching status locally: approving mints the approval
     // the invite buttons are gated on, and the page needs its id.
     await load();
+    // load() only refreshes this page's own state. The job detail and reports
+    // pages are server-rendered and show this shortlist too.
+    router.refresh();
   }
 
   /**
@@ -179,6 +184,7 @@ export default function ShortlistPage({ params }: { params: { tenant: string; id
       }
       setMessage(describeSend(data.sent ?? []));
       await load();
+      router.refresh();
     } catch {
       setError("Could not send the interview invite");
     } finally {

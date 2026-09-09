@@ -43,7 +43,7 @@ export async function GET(
       // The panel shows which job each mailbox files into, so the job titles
       // come back with the connections rather than as a second round trip.
       const jobs = await tx.job.findMany({
-        where: { tenantId: ctx.tenant.id },
+        where: { tenantId: ctx.tenant.id, deletedAt: null },
         select: { id: true, title: true, status: true },
         orderBy: { createdAt: "desc" },
       });

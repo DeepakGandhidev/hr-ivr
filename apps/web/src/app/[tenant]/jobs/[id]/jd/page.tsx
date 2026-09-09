@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 interface JobDescription {
@@ -13,6 +14,7 @@ interface JobDescription {
 }
 
 export default function JdStudioPage({ params }: { params: { tenant: string; id: string } }) {
+  const router = useRouter();
   const { tenant, id } = params;
   const [versions, setVersions] = useState<JobDescription[]>([]);
   const [body, setBody] = useState("");
@@ -58,6 +60,7 @@ export default function JdStudioPage({ params }: { params: { tenant: string; id:
     setVersions((prev) => [draft, ...prev]);
     setSelectedVersion(draft.version);
     setMessage(`Generated draft version ${draft.version} — review, edit, then approve.`);
+    router.refresh();
   }
 
   async function saveVersion() {
@@ -85,6 +88,7 @@ export default function JdStudioPage({ params }: { params: { tenant: string; id:
     setMessage(`Saved version ${saved.version}`);
     setVersions((prev) => [saved, ...prev]);
     setSelectedVersion(saved.version);
+    router.refresh();
   }
 
   async function approveLatest() {
@@ -101,6 +105,7 @@ export default function JdStudioPage({ params }: { params: { tenant: string; id:
     setVersions((prev) =>
       prev.map((v) => (v.id === approved.id ? { ...v, approvedAt: approved.approvedAt } : v))
     );
+    router.refresh();
   }
 
   const hasApproved = versions.some((v) => v.approvedAt);

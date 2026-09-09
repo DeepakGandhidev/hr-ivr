@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 interface JobPost {
@@ -27,6 +28,7 @@ interface Job {
 }
 
 export default function PublishPage({ params }: { params: { tenant: string; id: string } }) {
+  const router = useRouter();
   const { tenant, id } = params;
   const [job, setJob] = useState<Job | null>(null);
   const [loading, setLoading] = useState(false);
@@ -58,6 +60,8 @@ export default function PublishPage({ params }: { params: { tenant: string; id: 
     // Merge rather than replace: the GET response carries fields the publish
     // response does not, and dropping them blanked the page.
     setJob((prev) => ({ ...prev, ...data.job }));
+    // The job detail page is server-rendered and shows this status.
+    router.refresh();
   }
 
   if (!job && !error) return <p className="muted">Loading…</p>;

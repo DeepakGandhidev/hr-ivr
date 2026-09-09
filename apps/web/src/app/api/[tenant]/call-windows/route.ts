@@ -62,7 +62,7 @@ export async function POST(
     }
 
     return withTenantAuth(tenant, Action.settingsUpdate, async (_ctx, tx) => {
-      const job = await tx.job.findUnique({ where: { id: parsed.data.jobId } });
+      const job = await tx.job.findFirst({ where: { id: parsed.data.jobId, deletedAt: null } });
       if (!job) {
         throw new NotFoundError("Job not found");
       }

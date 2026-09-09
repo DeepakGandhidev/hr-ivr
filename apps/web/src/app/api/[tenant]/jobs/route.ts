@@ -13,6 +13,9 @@ export async function GET(
   return handleApi(() =>
     withTenantAuth(tenant, Action.jobRead, async (_ctx, tx) => {
       const jobs = await tx.job.findMany({
+        // Archived roles stay in the database for their candidates' sake, but
+        // they are not part of the hiring surface any more.
+        where: { deletedAt: null },
         orderBy: { createdAt: "desc" },
         include: {
           descriptions: {

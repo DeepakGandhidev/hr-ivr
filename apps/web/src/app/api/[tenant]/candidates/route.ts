@@ -97,7 +97,7 @@ export async function POST(
 
     // The job is confirmed to exist inside the tenant transaction, so RLS is
     // what proves it belongs to this tenant — not a filter we remembered to add.
-    const job = await tx((db) => db.job.findUnique({ where: { id: jobId } }));
+    const job = await tx((db) => db.job.findFirst({ where: { id: jobId, deletedAt: null } }));
     if (!job) {
       throw new NotFoundError("Job not found");
     }

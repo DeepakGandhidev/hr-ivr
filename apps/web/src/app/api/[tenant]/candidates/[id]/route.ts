@@ -49,7 +49,7 @@ export async function PATCH(
 
       // RLS scopes this read to the tenant, so a job id from another workspace
       // simply is not found rather than being moved into.
-      const job = await db.job.findUnique({ where: { id: parsed.data.jobId } });
+      const job = await db.job.findFirst({ where: { id: parsed.data.jobId, deletedAt: null } });
       if (!job) throw new NotFoundError("Job not found");
 
       if (candidate.jobId === job.id) {
@@ -118,4 +118,170 @@ export async function PATCH(
       });
     });
   });
+}
+
+/**
+ * Everything known about one candidate, in a single read.
+ *
+ * The acceptance criterion for this page is that a hiring manager can answer
+ * "who is this, what did we learn, what happened so far" without opening
+ * another screen — so the screenings, calls, reports, notes and the events
+ * behind the timeline all come back together rather than as six round trips.
+ */
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { tenant: string; id: string } }
+) {
+  const { tenant, id } = params;
+  return handleApi(async () => {
+    const { tx } = await authorizeTenant(tenant, Action.candidateRead);
+
+    return tx(async (db) => {
+      const candidate = await db.candidate.findUnique({
+        where: { id },
+        include: {
+          job: { select: { id: true, title: true, mustHaves: true, goodToHaves: true } },
+          // Every screening, newest first: a candidate moved between roles or
+          // re-screened after a JD edit has more than one, and which one was
+          // current when a decision was taken is the whole point of keeping them.
+          screenings: { orderBy: { createdAt: "desc" } },
+          notes: {
+            orderBy: { createdAt: "desc" },
+            include: { author: { select: { id: true, name: true, email: true } } },
+          },
+          interviewCalls: {
+            orderBy: { startedAt: "desc" },
+            include: { assessmentReport: true },
+          },
+          outreachEmails: {
+            orderBy: { createdAt: "desc" },
+            select: { id: true, createdAt: true, sentAt: true, status: true },
+          },
+          shortlistItems: {
+            include: {
+              shortlist: {
+                select: {
+                  id: true,
+                  status: true,
+                  createdAt: true,
+                  approvals: {
+                    orderBy: { approvedAt: "desc" },
+                    select: {
+                      id: true,
+                      approvedAt: true,
+                      approver: { select: { name: true, email: true } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!candidate) {
+        throw new NotFoundError("Candidate not found");
+      }
+
+      return { candidate, timeline: buildTimeline(candidate) };
+    });
+  });
+}
+
+type TimelineEvent = {
+  at: string;
+  kind: "applied" | "screened" | "shortlisted" | "approved" | "invited" | "called" | "reported";
+  title: string;
+  detail: string;
+};
+
+/**
+ * The candidate's history as one ordered list.
+ *
+ * Assembled from the rows that already exist rather than from an event log:
+ * there is no such log, and writing one now would start empty, so every
+ * candidate already in the system would have a blank timeline.
+ */
+function buildTimeline(c: {
+  createdAt: Date;
+  routedBy: string | null;
+  screenings: Array<{ createdAt: Date; score: number; verdict: string }>;
+  shortlistItems: Array<{
+    createdAt: Date;
+    addedBy: string;
+    shortlist: {
+      approvals: Array<{ approvedAt: Date; approver: { name: string | null; email: string } }>;
+    };
+  }>;
+  outreachEmails: Array<{ createdAt: Date; sentAt: Date | null; status: string | null }>;
+  interviewCalls: Array<{
+    startedAt: Date;
+    endedAt: Date | null;
+    status: string | null;
+    assessmentReport: { overallScore: number; recommendation: string; generatedAt: Date } | null;
+  }>;
+}): TimelineEvent[] {
+  const events: TimelineEvent[] = [];
+
+  events.push({
+    at: c.createdAt.toISOString(),
+    kind: "applied",
+    title: "Applied",
+    detail: c.routedBy ? `Filed by ${c.routedBy}` : "Application received",
+  });
+
+  for (const s of c.screenings) {
+    events.push({
+      at: s.createdAt.toISOString(),
+      kind: "screened",
+      title: `Screened — ${s.score}`,
+      detail: s.verdict === "shortlist" ? "Met the threshold" : "Below the threshold",
+    });
+  }
+
+  for (const item of c.shortlistItems) {
+    events.push({
+      at: item.createdAt.toISOString(),
+      kind: "shortlisted",
+      title: "Added to shortlist",
+      detail: item.addedBy === "ai" ? "By Pratibha" : "By a reviewer",
+    });
+    for (const a of item.shortlist.approvals) {
+      events.push({
+        at: a.approvedAt.toISOString(),
+        kind: "approved",
+        title: "Shortlist approved",
+        detail: `By ${a.approver.name ?? a.approver.email}`,
+      });
+    }
+  }
+
+  for (const e of c.outreachEmails) {
+    if (!e.sentAt) continue;
+    events.push({
+      at: e.sentAt.toISOString(),
+      kind: "invited",
+      title: "Interview invite sent",
+      detail: e.status ?? "sent",
+    });
+  }
+
+  for (const call of c.interviewCalls) {
+    events.push({
+      at: call.startedAt.toISOString(),
+      kind: "called",
+      title: "Called Pratibha",
+      detail: call.status ? call.status.replace(/_/g, " ") : "in progress",
+    });
+    if (call.assessmentReport) {
+      events.push({
+        at: call.assessmentReport.generatedAt.toISOString(),
+        kind: "reported",
+        title: `Assessment ready — ${call.assessmentReport.overallScore}`,
+        detail: call.assessmentReport.recommendation.replace(/_/g, " "),
+      });
+    }
+  }
+
+  return events.sort((a, b) => b.at.localeCompare(a.at));
 }

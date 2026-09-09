@@ -13,7 +13,10 @@ export default async function CareersJobPage({ params }: PageProps) {
   // meant to expose — an OPEN job and its APPROVED description. It must never
   // be widened to unapproved drafts, closed roles, or candidate data.
   const job = await adminPrisma.job.findFirst({
-    where: { slug: jobSlug, status: "open" },
+    // deletedAt is belt-and-braces: archiving also closes the role, so the
+    // status filter already hides it. Both, because this page is public and a
+    // future change to either rule must not quietly republish an archived job.
+    where: { slug: jobSlug, status: "open", deletedAt: null },
     include: {
       tenant: { select: { name: true } },
       descriptions: {

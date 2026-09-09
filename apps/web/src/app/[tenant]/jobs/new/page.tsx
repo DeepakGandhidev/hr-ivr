@@ -40,6 +40,10 @@ export default function NewJobPage({ params }: { params: { tenant: string } }) {
         setError(data.message || "Failed to create job");
         return;
       }
+      // The jobs list is server-rendered, so the Router Cache would serve the
+      // payload from before this job existed. Without this the new job is
+      // missing from the list until a hard reload.
+      router.refresh();
       router.push(`/${tenant}/jobs/${data.job?.id ?? ""}`);
     } finally {
       setLoading(false);

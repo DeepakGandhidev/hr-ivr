@@ -17,10 +17,27 @@ describe("Role permission matrix", () => {
     { role: UserRole.admin, action: Action.teamManage, allowed: false },
     { role: UserRole.owner, action: Action.teamManage, allowed: true },
     { role: UserRole.owner, action: Action.billingManage, allowed: true },
+    // Archiving a role hides a job that candidates were already screened
+    // against, so it must not be reachable by someone who cannot edit one.
+    { role: UserRole.viewer, action: Action.jobDelete, allowed: false },
+    { role: UserRole.reviewer, action: Action.jobDelete, allowed: false },
+    { role: UserRole.admin, action: Action.jobDelete, allowed: true },
+    { role: UserRole.owner, action: Action.jobDelete, allowed: true },
   ];
 
   it.each(cases)("$role can $action = $allowed", ({ role, action, allowed }) => {
     expect(can(role, action)).toBe(allowed);
+  });
+
+  // The spec asked for delete at reviewer while edit sat at admin, which would
+  // have let a reviewer archive a role they could not edit. They are pinned
+  // together here so the inconsistency cannot come back unnoticed.
+  it("never lets someone archive a job they cannot edit", () => {
+    for (const role of [UserRole.viewer, UserRole.reviewer, UserRole.admin, UserRole.owner]) {
+      if (can(role, Action.jobDelete)) {
+        expect(can(role, Action.jobUpdate)).toBe(true);
+      }
+    }
   });
 });
 

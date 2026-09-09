@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import AddCandidates from "@/components/AddCandidates";
 import EmailCandidate from "@/components/EmailCandidate";
@@ -31,6 +32,7 @@ interface Candidate {
 }
 
 export default function CandidatesPage({ params }: { params: { tenant: string; id: string } }) {
+  const router = useRouter();
   const { tenant, id } = params;
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -82,6 +84,7 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
       if (!res.ok) throw new Error(data.message || "Could not move this candidate");
 
       await load();
+      router.refresh();
       setMessage(
         `Moved to ${data.movedTo}.` +
           (data.discardedScreenings
@@ -114,6 +117,7 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
     setBusy(null);
     if (ok) {
       await load();
+      router.refresh();
       setMessage("Screened. Shortlisted candidates appear on the Shortlist tab.");
     }
   }
@@ -139,6 +143,7 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
 
     setBulk(null);
     await load();
+    router.refresh();
     setMessage(`Screened ${done} of ${pending.length}.`);
   }
 
@@ -219,7 +224,9 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
                     <tr key={candidate.id}>
                       <td>
                         <div style={{ fontWeight: 550 }}>
-                          {candidate.name || <span style={{ color: "var(--danger)" }}>Could not parse</span>}
+                          <Link href={`/${tenant}/candidates/${candidate.id}`} style={{ color: "inherit" }}>
+                            {candidate.name || <span style={{ color: "var(--danger)" }}>Could not parse</span>}
+                          </Link>
                         </div>
                         <div className="subtle">{candidate.email || "no email"}</div>
                         {candidate.routedBy === "fallback" && (

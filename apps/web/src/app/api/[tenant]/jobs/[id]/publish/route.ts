@@ -10,8 +10,8 @@ export async function POST(
   const { tenant, id } = params;
   return handleApi(() =>
     withTenantAuth(tenant, Action.jobPublish, async (_ctx, tx) => {
-      const job = await tx.job.findUnique({
-        where: { id },
+      const job = await tx.job.findFirst({
+        where: { id, deletedAt: null },
         include: {
           descriptions: {
             where: { approvedAt: { not: null } },
@@ -63,8 +63,8 @@ export async function POST(
       // reads job.posts. Returning the bare update() result left posts
       // undefined, so the page threw straight after a successful publish and
       // the whole thing looked like a failure.
-      const updated = await tx.job.findUnique({
-        where: { id },
+      const updated = await tx.job.findFirst({
+        where: { id, deletedAt: null },
         include: { posts: { orderBy: { createdAt: "desc" } } },
       });
 

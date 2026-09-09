@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/server-fetch";
+import JobActions from "@/components/JobActions";
 
 interface Job {
   id: string;
@@ -7,6 +8,7 @@ interface Job {
   status: string;
   location?: string | null;
   createdAt: string;
+  _count?: { candidates: number };
 }
 
 async function loadJobs(tenant: string): Promise<Job[]> {
@@ -24,7 +26,11 @@ function statusClass(status: string) {
 
 export default async function JobsPage({ params }: { params: { tenant: string } }) {
   const { tenant } = params;
-  const jobs = await loadJobs(tenant);
+  const [jobs, me] = await Promise.all([
+    loadJobs(tenant),
+    apiGet<{ user?: { role?: string } }>("/api/auth/me", {}),
+  ]);
+  const canDelete = ["admin", "owner"].includes(me.user?.role ?? "");
 
   return (
     <div style={{ maxWidth: 900 }}>
@@ -52,20 +58,33 @@ export default async function JobsPage({ params }: { params: { tenant: string } 
       ) : (
         <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(270px, 1fr))" }}>
           {jobs.map((job) => (
-            <Link
-              key={job.id}
-              href={`/${tenant}/jobs/${job.id}`}
-              className="card"
-              style={{ color: "inherit", display: "block" }}
-            >
+            /* A div, not a Link: the Edit and Archive controls are interactive
+               and nesting them inside an anchor is invalid HTML — the browser
+               closes the anchor early and the layout breaks. The title carries
+               the navigation instead. */
+            <div key={job.id} className="card" style={{ display: "block" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 10 }}>
-                <strong style={{ fontSize: 15 }}>{job.title}</strong>
+                <Link
+                  href={`/${tenant}/jobs/${job.id}`}
+                  style={{ color: "inherit", fontSize: 15, fontWeight: 600 }}
+                >
+                  {job.title}
+                </Link>
                 <span className={`badge ${statusClass(job.status)}`}>{job.status}</span>
               </div>
               <div className="subtle" style={{ marginTop: 6 }}>
                 {job.location || "Location not set"}
               </div>
-            </Link>
+              <div style={{ marginTop: 12 }}>
+                <JobActions
+                  tenant={tenant}
+                  jobId={job.id}
+                  title={job.title}
+                  candidateCount={job._count?.candidates ?? 0}
+                  canDelete={canDelete}
+                />
+              </div>
+            </div>
           ))}
         </div>
       )}

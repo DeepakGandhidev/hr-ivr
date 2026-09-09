@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/server-fetch";
+import JobActions from "@/components/JobActions";
 
 interface JobDescription {
   id: string;
@@ -21,8 +22,19 @@ interface Job {
   goodToHaves: string[];
 }
 
+interface JobVersion {
+  id: string;
+  version: number;
+  title: string;
+  changeNote?: string | null;
+  createdAt: string;
+  author?: { name?: string | null; email: string } | null;
+}
+
 interface JobWithDescriptions extends Job {
   descriptions: JobDescription[];
+  versions?: JobVersion[];
+  _count?: { candidates: number };
 }
 
 async function loadJob(tenant: string, id: string): Promise<JobWithDescriptions | null> {
@@ -32,7 +44,13 @@ async function loadJob(tenant: string, id: string): Promise<JobWithDescriptions 
 
 export default async function JobDetailPage({ params }: { params: { tenant: string; id: string } }) {
   const { tenant, id } = params;
-  const job = await loadJob(tenant, id);
+  const [job, me] = await Promise.all([
+    loadJob(tenant, id),
+    // Resolved here rather than in the client component so the Archive button
+    // does not appear and then disappear once a role check lands.
+    apiGet<{ user?: { role?: string } }>("/api/auth/me", {}),
+  ]);
+  const canDelete = ["admin", "owner"].includes(me.user?.role ?? "");
 
   if (!job) {
     return (
@@ -58,9 +76,18 @@ export default async function JobDetailPage({ params }: { params: { tenant: stri
     <div style={{ maxWidth: 860 }}>
       <div className="page-head">
         <Link href={`/${tenant}/jobs`} className="subtle">&larr; Jobs</Link>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6, flexWrap: "wrap" }}>
           <h1 style={{ margin: 0 }}>{job.title}</h1>
           <span className={`badge ${statusClass}`}>{job.status}</span>
+          <div style={{ marginLeft: "auto" }}>
+            <JobActions
+              tenant={tenant}
+              jobId={id}
+              title={job.title}
+              candidateCount={job._count?.candidates ?? 0}
+              canDelete={canDelete}
+            />
+          </div>
         </div>
       </div>
 
@@ -103,6 +130,28 @@ export default async function JobDetailPage({ params }: { params: { tenant: stri
                 {(job.goodToHaves ?? []).map((g) => <span key={g} className="badge badge-neutral">{g}</span>)}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {(job.versions?.length ?? 0) > 1 && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <h3>Role history</h3>
+          <p className="muted" style={{ marginTop: -4 }}>
+            What this role looked like when earlier candidates were screened against it.
+          </p>
+          <div className="stack" style={{ gap: 8 }}>
+            {job.versions!.slice(0, 5).map((v) => (
+              <div key={v.id} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <strong>v{v.version}</strong> · {v.title}
+                  {v.changeNote && <div className="subtle">{v.changeNote}</div>}
+                </div>
+                <div className="subtle" style={{ whiteSpace: "nowrap" }}>
+                  {new Date(v.createdAt).toLocaleDateString()}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

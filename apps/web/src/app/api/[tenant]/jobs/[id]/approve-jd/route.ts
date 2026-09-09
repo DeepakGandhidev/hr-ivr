@@ -10,7 +10,7 @@ export async function POST(
   const { tenant, id } = params;
   return handleApi(() =>
     withTenantAuth(tenant, Action.jobApproveJD, async (ctx, tx) => {
-      const job = await tx.job.findUnique({ where: { id } });
+      const job = await tx.job.findFirst({ where: { id, deletedAt: null } });
       if (!job) {
         throw new NotFoundError("Job not found");
       }

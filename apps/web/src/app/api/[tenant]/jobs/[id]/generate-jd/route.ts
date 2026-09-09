@@ -30,7 +30,7 @@ export async function POST(
 
     // 1. Read the brief and the prompt template.
     const { job, promptBody } = await tx(async (db) => {
-      const job = await db.job.findUnique({ where: { id } });
+      const job = await db.job.findFirst({ where: { id, deletedAt: null } });
       if (!job) {
         throw new NotFoundError("Job not found");
       }

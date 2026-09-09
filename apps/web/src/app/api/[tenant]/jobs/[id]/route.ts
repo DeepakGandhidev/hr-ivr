@@ -4,7 +4,31 @@ import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { z } from "zod";
 
-const updateJobSchema = createJobSchema.partial();
+const updateJobSchema = createJobSchema.partial().extend({
+  /// Optional note explaining the edit, stored on the version it creates.
+  changeNote: z.string().trim().max(500).optional(),
+});
+
+/** The fields a JobVersion snapshots, read off a job row. */
+function snapshot(job: {
+  title: string;
+  location: string | null;
+  salaryBand: string | null;
+  experienceRange: string | null;
+  mustHaves: unknown;
+  goodToHaves: unknown;
+  screeningThreshold: number | null;
+}) {
+  return {
+    title: job.title,
+    location: job.location,
+    salaryBand: job.salaryBand,
+    experienceRange: job.experienceRange,
+    mustHaves: job.mustHaves as never,
+    goodToHaves: job.goodToHaves as never,
+    screeningThreshold: job.screeningThreshold,
+  };
+}
 
 export async function GET(
   request: NextRequest,
@@ -13,13 +37,19 @@ export async function GET(
   const { tenant, id } = params;
   return handleApi(() =>
     withTenantAuth(tenant, Action.jobRead, async (_ctx, tx) => {
-      const job = await tx.job.findUnique({
-        where: { id },
+      const job = await tx.job.findFirst({
+        // An archived job is gone as far as the portal is concerned. Its rows
+        // survive because candidates, screenings and reports hang off them.
+        where: { id, deletedAt: null },
         include: {
           descriptions: {
             where: { approvedAt: { not: null } },
             orderBy: { version: "desc" },
             take: 1,
+          },
+          versions: {
+            orderBy: { version: "desc" },
+            include: { author: { select: { id: true, name: true, email: true } } },
           },
           posts: { orderBy: { createdAt: "desc" }, take: 5 },
           // Counted separately from the list above, which is filtered to
@@ -51,13 +81,36 @@ export async function PATCH(
       throw new ValidationError("Invalid job update payload", parsed.error.flatten());
     }
 
-    return withTenantAuth(tenant, Action.jobUpdate, async (_ctx, tx) => {
-      const existing = await tx.job.findUnique({ where: { id } });
+    return withTenantAuth(tenant, Action.jobUpdate, async (ctx, tx) => {
+      const existing = await tx.job.findFirst({
+        where: { id, deletedAt: null },
+        include: { posts: { where: { status: "posted" } } },
+      });
       if (!existing) {
         throw new NotFoundError("Job not found");
       }
 
       const data: z.infer<typeof updateJobSchema> = parsed.data;
+
+      // Snapshot BEFORE the write, so the version records what the role was
+      // when its existing candidates were screened against it. Taken after the
+      // update it would just duplicate the new state and prove nothing.
+      const latest = await tx.jobVersion.findFirst({
+        where: { jobId: id },
+        orderBy: { version: "desc" },
+        select: { version: true },
+      });
+
+      await tx.jobVersion.create({
+        data: {
+          jobId: id,
+          version: (latest?.version ?? 0) + 1,
+          ...snapshot(existing),
+          changeNote: data.changeNote ?? null,
+          createdBy: ctx.user.id,
+        },
+      });
+
       const job = await tx.job.update({
         where: { id },
         data: {
@@ -70,7 +123,51 @@ export async function PATCH(
         },
       });
 
-      return { job };
+      // The caller needs to know a live posting is now out of date. Reported
+      // rather than acted on: re-publishing is the user's decision, and doing
+      // it silently would push an unreviewed change to a public careers page.
+      return {
+        job,
+        requiresRepublish: existing.posts.length > 0,
+        livePostings: existing.posts.map((p) => ({ channel: p.channel, postedAt: p.postedAt })),
+      };
     });
   });
+}
+
+/**
+ * Archive a job. Never a hard delete.
+ *
+ * Candidates, screenings, interview calls and assessment reports all hang off a
+ * job. Removing the row would cascade through every one of them and destroy the
+ * evidence behind hiring decisions already made - including calls the tenant
+ * was billed for. So the row stays and the portal stops showing it.
+ */
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { tenant: string; id: string } }
+) {
+  const { tenant, id } = params;
+  return handleApi(() =>
+    withTenantAuth(tenant, Action.jobDelete, async (ctx, tx) => {
+      const job = await tx.job.findFirst({
+        where: { id, deletedAt: null },
+        include: { _count: { select: { candidates: true } } },
+      });
+      if (!job) {
+        throw new NotFoundError("Job not found");
+      }
+
+      const archived = await tx.job.update({
+        where: { id },
+        data: { deletedAt: new Date(), deletedBy: ctx.user.id, status: "closed" },
+      });
+
+      return {
+        job: archived,
+        archived: true,
+        candidatesRetained: job._count.candidates,
+      };
+    })
+  );
 }

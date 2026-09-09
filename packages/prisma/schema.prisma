@@ -88,6 +88,9 @@ model User {
 
   tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   jobsCreated     Job[]    @relation("CreatedBy")
+  jobsDeleted     Job[]    @relation("DeletedBy")
+  jobVersions     JobVersion[] @relation("JobVersionAuthor")
+  candidateNotes  CandidateNote[] @relation("NoteAuthor")
   jobDescriptionsApproved JobDescription[] @relation("ApprovedBy")
   approvals       Approval[]
   interviewProtocolsUpdated InterviewProtocol[] @relation("UpdatedBy")
@@ -185,8 +188,17 @@ model Job {
   createdBy         String   @map("created_by")
   createdAt         DateTime @default(now()) @map("created_at")
 
+  /// Soft delete. A job is never removed: candidates, screenings, calls and
+  /// assessment reports all hang off it, and destroying a role would take the
+  /// evidence for hiring decisions with it. Every list filters on this being
+  /// null; nothing hard-deletes.
+  deletedAt         DateTime? @map("deleted_at")
+  deletedBy         String?   @map("deleted_by")
+
   tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   creator           User     @relation("CreatedBy", fields: [createdBy], references: [id])
+  deleter           User?    @relation("DeletedBy", fields: [deletedBy], references: [id])
+  versions          JobVersion[]
   descriptions      JobDescription[]
   posts             JobPost[]
   candidates        Candidate[]
@@ -219,6 +231,36 @@ model JobDescription {
 
   @@unique([jobId, version])
   @@map("job_descriptions")
+}
+
+/// A snapshot of the structured role, taken before each edit.
+///
+/// JobDescription already versions the JD *body*. It does not cover the fields
+/// a recruiter most often needs to correct - salary band, experience range,
+/// must-haves - and those are what the role is actually screened against. An
+/// edit that silently rewrote them would leave no way to answer "what were we
+/// screening for when we rejected this candidate".
+model JobVersion {
+  id                 String   @id @default(cuid())
+  jobId              String   @map("job_id")
+  version            Int
+  title              String
+  location           String?
+  salaryBand         String?  @map("salary_band")
+  experienceRange    String?  @map("experience_range")
+  mustHaves          Json     @map("must_haves")
+  goodToHaves        Json     @map("good_to_haves")
+  screeningThreshold Int?     @map("screening_threshold")
+  /// Why this edit was made, when the editor said.
+  changeNote         String?  @map("change_note")
+  createdBy          String   @map("created_by")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  job                Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  author             User     @relation("JobVersionAuthor", fields: [createdBy], references: [id])
+
+  @@unique([jobId, version])
+  @@map("job_versions")
 }
 
 enum JobPostChannel {
@@ -282,6 +324,7 @@ model Candidate {
   tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   job               Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
   screenings        Screening[]
+  notes             CandidateNote[]
   shortlistItems    ShortlistItem[]
   outreachEmails    OutreachEmail[]
   interviewCalls    InterviewCall[]
@@ -290,6 +333,26 @@ model Candidate {
   @@index([tenantId, phoneE164])
   @@index([tenantId, jobId, email])
   @@map("candidates")
+}
+
+/// Free-text notes any team member can leave on a candidate.
+///
+/// Edit and delete are the author's alone - enforced in the API, not just
+/// hidden in the UI. A note is someone's own judgement of a person, and letting
+/// a colleague quietly rewrite it changes the record of who thought what.
+model CandidateNote {
+  id          String    @id @default(cuid())
+  candidateId String    @map("candidate_id")
+  authorId    String    @map("author_id")
+  body        String
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  author      User      @relation("NoteAuthor", fields: [authorId], references: [id])
+
+  @@index([candidateId, createdAt])
+  @@map("candidate_notes")
 }
 
 enum ScreeningVerdict {

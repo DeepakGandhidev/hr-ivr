@@ -26,6 +26,7 @@ export enum Action {
   jobCreate = 'job:create',
   jobRead = 'job:read',
   jobUpdate = 'job:update',
+  jobDelete = 'job:delete',
   jobApproveJD = 'job:approve-jd',
   jobPublish = 'job:publish',
 
@@ -60,6 +61,10 @@ const PERMISSIONS: Record<Action, UserRole> = {
   [Action.jobCreate]: UserRole.admin,
   [Action.jobRead]: UserRole.viewer,
   [Action.jobUpdate]: UserRole.admin,
+  // Archiving a role is at least as consequential as editing one - it hides a
+  // job that candidates have already been screened against - so it sits at the
+  // same level rather than below it.
+  [Action.jobDelete]: UserRole.admin,
   [Action.jobApproveJD]: UserRole.reviewer,
   [Action.jobPublish]: UserRole.admin,
 

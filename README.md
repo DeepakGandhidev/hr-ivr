@@ -37,12 +37,23 @@ docker compose -f docker-compose.dev.yml up
 First run takes a few minutes (image build, then GoTrue and Prisma migrations).
 When it settles:
 
-| | |
-|---|---|
-| Web app | http://localhost:3000 |
-| Worker | http://localhost:8091 |
-| Auth | http://localhost:9999 |
-| Postgres | `postgres://pratibha:pratibha@localhost:5432/pratibha` |
+| | | |
+|---|---|---|
+| Web app | http://localhost:3000 | |
+| Worker | http://localhost:8091 | |
+| Supabase Studio | http://localhost:54323 | browse and query the database |
+| Mailpit | http://localhost:8025 | every email the app sends, caught locally |
+| Auth (GoTrue) | http://localhost:9999 | |
+| Postgres | `postgres://pratibha:pratibha@localhost:5432/pratibha` | |
+
+Supabase runs as containers here, not through the Supabase CLI, so nothing
+extra has to be installed. Only auth and the database are included: this app
+uses Supabase for sign-in and Prisma for everything else, so PostgREST, Storage
+and Realtime would be nine containers nobody calls. Studio's API-shaped tabs
+are therefore empty; its table editor and SQL editor are the point.
+
+Mail is never delivered locally. Invites, rejections and verification mail all
+land in Mailpit, so a dev machine cannot email a real candidate by accident.
 
 Migrations run automatically, in their own container, before either service
 starts — so neither ever comes up against a schema that does not exist yet.

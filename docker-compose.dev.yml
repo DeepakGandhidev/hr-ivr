@@ -54,6 +54,62 @@ services:
     ports:
       - "9999:9999"
 
+  # Reads the schema for Studio. Studio talks to this, not to Postgres.
+  pg-meta:
+    image: supabase/postgres-meta:v0.84.2
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PG_META_PORT: "8080"
+      PG_META_DB_HOST: postgres
+      PG_META_DB_PORT: "5432"
+      PG_META_DB_NAME: pratibha
+      PG_META_DB_USER: postgres
+      PG_META_DB_PASSWORD: postgres
+
+  # The Supabase table editor and SQL runner.
+  #
+  # Only the database features work here: this app uses Supabase for auth and
+  # nothing else, so there is no PostgREST or Storage behind the API-shaped
+  # tabs. Table editor, SQL editor and the schema browser are the point.
+  studio:
+    image: supabase/studio:2025.06.30-sha-6f5982d
+    depends_on:
+      - pg-meta
+    environment:
+      STUDIO_PG_META_URL: http://pg-meta:8080
+      POSTGRES_PASSWORD: postgres
+      DEFAULT_ORGANIZATION_NAME: Pratibha
+      DEFAULT_PROJECT_NAME: pratibha
+      SUPABASE_URL: http://auth:9999
+      SUPABASE_PUBLIC_URL: http://localhost:54323
+      AUTH_JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      NEXT_PUBLIC_ENABLE_LOGS: "false"
+    # The shipped healthcheck can never pass self-hosted, for two separate
+    # reasons: it calls /api/platform/profile, which only exists on Supabase's
+    # hosted platform, and it calls it on localhost, while Studio binds solely
+    # to the container's hostname interface - loopback is refused. A container
+    # permanently marked unhealthy sends people hunting a bug that is not there,
+    # so this checks the root path on the interface Studio actually listens on.
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://'+require('os').hostname()+':3000/').then(r=>{if(r.status>=400)throw new Error(r.status)})\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    ports:
+      - "54323:3000"
+
+  # Catches every outbound email instead of delivering it, so invite and
+  # rejection mail can be read locally with no Resend key and no risk of
+  # actually mailing a candidate from a dev machine.
+  mailpit:
+    image: axllent/mailpit:v1.21
+    ports:
+      - "8025:8025"   # web UI
+      - "1025:1025"   # SMTP
+
   # Applies migrations, then exits. Both services wait for it, so neither ever
   # starts against a schema that does not exist yet.
   migrate:

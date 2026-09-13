@@ -30,6 +30,10 @@ export function TenantNav({ tenant }: TenantNavProps) {
     {
       label: "Settings",
       links: [
+        // Company first: it is the workspace's own identity, and the section
+        // most people look for when they arrive here.
+        { href: `/${tenant}/settings/company`, label: "Company profile" },
+        { href: `/${tenant}/settings/profile`, label: "My profile" },
         { href: `/${tenant}/settings/email`, label: "Email" },
         { href: `/${tenant}/settings/team`, label: "Team" },
         { href: `/${tenant}/settings/templates`, label: "Templates" },

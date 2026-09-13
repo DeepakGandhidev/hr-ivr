@@ -48,6 +48,79 @@ enum TenantStatus {
   suspended
 }
 
+/// The company's own details, as distinct from how it sounds on a call.
+///
+/// `legalName` here is what goes on an invoice or a contract. The name Pratibha
+/// says out loud lives on InterviewProtocol.companyName, scoped per job, and the
+/// two are deliberately separate: a company hiring under a brand still invoices
+/// under its registered entity.
+///
+/// One row per tenant, created on demand rather than at signup - an empty
+/// profile and no profile mean the same thing, and the second needs no migration
+/// to backfill.
+model CompanyProfile {
+  id              String   @id @default(cuid())
+  tenantId        String   @unique @map("tenant_id")
+
+  /// Registered entity name, for invoices and contracts.
+  legalName       String?  @map("legal_name")
+  /// Registered / billing address, free-form: Indian addresses do not fit
+  /// fixed fields, and an invoice needs it as written.
+  billingAddress  String?  @map("billing_address")
+  /// State, which decides CGST+SGST versus IGST on an invoice. Held separately
+  /// from the address because it is a calculation input, not decoration.
+  billingState    String?  @map("billing_state")
+  gstin           String?
+  /// Shown on the hosted careers page.
+  description     String?
+
+  /// The logo, as a TenantAsset id. Not a URL: the file is served through a
+  /// tenant-scoped route, so storing a path would invite bypassing it.
+  logoAssetId     String?  @map("logo_asset_id")
+
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  logo            TenantAsset? @relation("CompanyLogo", fields: [logoAssetId], references: [id], onDelete: SetNull)
+
+  @@map("company_profiles")
+}
+
+enum TenantAssetKind {
+  company_logo
+  user_photo
+}
+
+/// A file belonging to a tenant.
+///
+/// Rows here are the index; the bytes live behind the storage driver
+/// (`apps/web/src/lib/storage.ts`), which is local disk today and swappable.
+/// Keeping an index in the database is what makes these findable for the
+/// deletion flow - files written straight to disk with a path in a column are
+/// exactly the ones nobody remembers to delete.
+///
+/// `tenantId` cascades, so deleting a tenant removes the rows; the storage
+/// driver is called alongside to remove the bytes.
+model TenantAsset {
+  id          String          @id @default(cuid())
+  tenantId    String          @map("tenant_id")
+  kind        TenantAssetKind
+  /// Opaque key for the storage driver. Never a browser-reachable URL.
+  storageKey  String          @map("storage_key")
+  contentType String          @map("content_type")
+  byteSize    Int             @map("byte_size")
+  uploadedBy  String?         @map("uploaded_by")
+  createdAt   DateTime        @default(now()) @map("created_at")
+
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  companyLogos CompanyProfile[] @relation("CompanyLogo")
+  userPhotos   User[]          @relation("UserPhoto")
+
+  @@index([tenantId, kind])
+  @@map("tenant_assets")
+}
+
 model Tenant {
   id            String       @id @default(cuid())
   name          String
@@ -56,6 +129,9 @@ model Tenant {
   trialEndsAt   DateTime?    @map("trial_ends_at")
   status        TenantStatus @default(trial)
   createdAt     DateTime     @default(now()) @map("created_at")
+
+  companyProfile CompanyProfile?
+  assets        TenantAsset[]
 
   plan          Plan         @relation(fields: [planId], references: [id])
   users         User[]
@@ -86,7 +162,30 @@ model User {
   authProviderId  String?  @unique @map("auth_provider_id")
   createdAt       DateTime @default(now()) @map("created_at")
 
+  // --- Personal profile ----------------------------------------------------
+
+  /// Profile photo, as a TenantAsset id. Same reasoning as the company logo:
+  /// the file is served through a tenant-scoped route, never a bare path.
+  photoAssetId    String?  @map("photo_asset_id")
+
+  /// IANA zone, e.g. "Asia/Kolkata". Timestamps are stored in UTC; this only
+  /// decides how they are rendered for this person.
+  timezone        String?
+
+  /// Which emails this person receives, as { key: boolean }. Absent keys mean
+  /// "on" - a notification type added later should reach people rather than be
+  /// silently off for everyone who has ever saved preferences.
+  notificationPrefs Json?  @map("notification_prefs")
+
+  /// Set when TOTP is confirmed, not when it is started - an unconfirmed
+  /// secret must never gate a login, or a failed setup locks the account out.
+  twoFactorSecret   String?   @map("two_factor_secret")
+  twoFactorEnabledAt DateTime? @map("two_factor_enabled_at")
+  /// Single-use recovery codes, stored hashed.
+  twoFactorRecovery String[]  @map("two_factor_recovery")
+
   tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  photo           TenantAsset? @relation("UserPhoto", fields: [photoAssetId], references: [id], onDelete: SetNull)
   jobsCreated     Job[]    @relation("CreatedBy")
   jobsDeleted     Job[]    @relation("DeletedBy")
   jobVersions     JobVersion[] @relation("JobVersionAuthor")

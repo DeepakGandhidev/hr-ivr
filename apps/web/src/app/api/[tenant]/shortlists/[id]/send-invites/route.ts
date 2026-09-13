@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { Action, NotFoundError } from "@pratibha/shared";
 import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
-import { outreachFromAddress, sendAsTenant } from "@/lib/email";
+import { outreachFromAddress, sendAsTenant, tenantLogoUrl } from "@/lib/email";
 import { defaultInterviewInviteVars, renderTemplate } from "@/lib/templates";
 import { validateSendInvitesBody, verifyOutreachGate } from "@/lib/gates";
 
@@ -61,6 +61,14 @@ export async function POST(
       });
       const fromAddress = outreachFromAddress(ctx.tenant.slug, ctx.tenant.name);
       const replyTo = connection?.address;
+
+      // Looked up once for the whole batch rather than per candidate: it is the
+      // same logo for every invite in this run.
+      const branding = await tx.companyProfile.findUnique({
+        where: { tenantId: ctx.tenant.id },
+        select: { logoAssetId: true },
+      });
+      const logoUrl = tenantLogoUrl(ctx.tenant.slug, Boolean(branding?.logoAssetId));
       const sent: Array<{ candidateId: string; outreachEmailId: string; status: string }> = [];
 
       // Who already has an invite under THIS approval. Scoped to the approval
@@ -116,6 +124,7 @@ export async function POST(
           subject,
           body,
           from: fromAddress,
+          ...(logoUrl ? { logoUrl } : {}),
           ...(replyTo ? { replyTo } : {}),
         });
 

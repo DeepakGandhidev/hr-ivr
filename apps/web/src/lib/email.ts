@@ -8,6 +8,40 @@ export interface SendEmailPayload {
   body: string;
   from?: string;
   replyTo?: string;
+  /**
+   * Absolute URL of the tenant's logo, when they have one.
+   *
+   * Absolute because the message is read in somebody else's inbox, where a
+   * relative path resolves to nothing. When present the mail goes out as HTML
+   * with the logo above the text, and the plain text is still sent alongside -
+   * a candidate whose client blocks images, or shows text only, must still be
+   * able to read the whole invitation.
+   */
+  logoUrl?: string;
+}
+
+/**
+ * Wrap a plain-text message so it can carry the company's logo.
+ *
+ * Deliberately minimal: inline styles, a table-free single column, no web
+ * fonts. Mail clients are not browsers, and the more this tries the more ways
+ * it has to arrive broken. The text is escaped - it is recruiter-authored and
+ * template-substituted, and neither is a reason to let markup through.
+ */
+export function renderBrandedEmail(body: string, logoUrl: string, companyName: string): string {
+  const escaped = body
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  return [
+    '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;',
+    'font-size:15px;line-height:1.6;color:#18181b;max-width:600px;margin:0 auto;padding:24px;">',
+    `<img src="${logoUrl}" alt="${companyName.replace(/"/g, "&quot;")}" `,
+    'style="max-width:160px;max-height:64px;object-fit:contain;display:block;margin-bottom:20px;" />',
+    `<div style="white-space:pre-wrap;">${escaped}</div>`,
+    "</div>",
+  ].join("");
 }
 
 /**
@@ -34,6 +68,23 @@ export function outreachFromAddress(tenantSlug: string, tenantName: string): str
   return `${tenantName} via Pratibha <${tenantSlug}@${domain}>`;
 }
 
+/**
+ * Absolute URL of a tenant's logo, for use in an email.
+ *
+ * Absolute, because the message is read in somebody else's inbox where a
+ * relative path resolves to nothing. Returns null when the deployment has no
+ * public base URL configured - a broken image is worse than no image, and a
+ * localhost URL in a candidate's inbox is exactly that.
+ */
+export function tenantLogoUrl(tenantSlug: string, hasLogo: boolean): string | undefined {
+  if (!hasLogo) return undefined;
+
+  const base = process.env.PUBLIC_BASE_URL;
+  if (!base || base.includes("localhost") || base.includes("127.0.0.1")) return undefined;
+
+  return `${base.replace(/\/$/, "")}/api/public/${tenantSlug}/logo`;
+}
+
 export interface SendEmailResult {
   ok: boolean;
   providerMessageId?: string;
@@ -58,6 +109,11 @@ export async function sendEmail(payload: SendEmailPayload): Promise<SendEmailRes
       to: payload.to,
       subject: payload.subject,
       text: payload.body,
+      // Both parts when there is a logo: the client picks, and a text-only
+      // reader still gets the whole message.
+      ...(payload.logoUrl
+        ? { html: renderBrandedEmail(payload.body, payload.logoUrl, payload.from ?? "") }
+        : {}),
       ...(payload.replyTo ? { replyTo: payload.replyTo } : {}),
     });
 

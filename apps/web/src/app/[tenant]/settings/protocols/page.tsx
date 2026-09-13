@@ -127,22 +127,6 @@ export default function ProtocolsPage({ params }: { params: { tenant: string } }
     }
   }
 
-  async function saveCompany() {
-    setError(null);
-    setMessage(null);
-    const res = await fetch(`/api/${tenant}/settings`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: companyName }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setError(data.message || "Failed to save company name");
-      return;
-    }
-    setMessage("Company name updated. The agent will use it on the next call.");
-  }
-
   const scopeLabel = scope ? jobs.find((j) => j.id === scope)?.title ?? "this job" : "all jobs";
   const overrides = protocols.filter((p) => p.jobId).length;
 
@@ -158,18 +142,6 @@ export default function ProtocolsPage({ params }: { params: { tenant: string } }
 
       {error && <div className="notice notice-error" style={{ marginBottom: 16 }}>{error}</div>}
       {message && <div className="notice notice-success" style={{ marginBottom: 16 }}>{message}</div>}
-
-      <div className="card" style={{ marginBottom: 16 }}>
-        <h3>Company</h3>
-        <label htmlFor="company">Company name</label>
-        <input id="company" value={companyName} onChange={(e) => setCompanyName(e.target.value)} />
-        <p className="subtle" style={{ marginTop: 4 }}>
-          The agent says this out loud when it introduces itself on every call.
-        </p>
-        <button type="button" onClick={saveCompany} disabled={!companyName.trim()}>
-          Save company name
-        </button>
-      </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <label htmlFor="scope">These settings apply to</label>
@@ -227,7 +199,7 @@ export default function ProtocolsPage({ params }: { params: { tenant: string } }
             />
           </div>
         </div>
-        <p className="subtle" style={{ marginTop: -8 }}>
+        <p className="subtle field-hint">
           The clock starts at the first question, not when the phone is answered
           — greeting and consent do not eat into the interview. An interview that
           overruns is wrapped up politely rather than cut off.
@@ -273,7 +245,7 @@ export default function ProtocolsPage({ params }: { params: { tenant: string } }
             />
           </div>
           <div>
-            <label htmlFor="brand">Hiring under (optional)</label>
+            <label htmlFor="brand">Hiring under</label>
             <input
               id="brand"
               value={draft.companyName ?? ""}
@@ -282,8 +254,12 @@ export default function ProtocolsPage({ params }: { params: { tenant: string } }
             />
           </div>
         </div>
-        <p className="subtle" style={{ marginTop: -8 }}>
-          Set a different brand here if this role is hired under another name.
+        <p className="subtle field-hint">
+          The name the agent says out loud when it introduces itself
+          {scope ? " on calls for this job" : " on every call"}. Leave blank to
+          use {companyName || "your workspace name"}.
+          {" "}This is the spoken name, not the legal entity — the name on
+          invoices and contracts is set in Company profile.
         </p>
 
         <div>

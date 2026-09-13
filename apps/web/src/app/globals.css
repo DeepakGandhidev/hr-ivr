@@ -938,3 +938,15 @@ a.stat:hover { border-color: var(--border-strong); text-decoration: none; box-sh
   color: var(--danger);
   border-color: var(--danger-border);
 }
+
+/* Helper text belonging to the control above it.
+   Was an inline margin-top of -8px, which overrode the stack's 14px gap and
+   pulled the text up into the inputs — visible as overlapping text under
+   Length, Minimum questions, Maximum questions and Agent name. Positive and
+   small keeps it attached without colliding. */
+.stack > .field-hint,
+.field-hint {
+  margin-top: 6px;
+  margin-bottom: 0;
+  line-height: 1.45;
+}

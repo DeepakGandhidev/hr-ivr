@@ -41,3 +41,49 @@ describe('pairQuestionsAndAnswers', () => {
     ])).toEqual([]);
   });
 });
+
+/**
+ * #validate returns a fresh whitelisted object rather than a copy of the
+ * model's input, so any field it does not name is silently discarded. All five
+ * report fields were dropped that way on the first live call after they were
+ * added: the report saved with question_answers populated (derived locally) and
+ * every model-sourced section null.
+ *
+ * Asserted on the source because the whitelist is the failure: a mock would
+ * pass whatever the test supplied straight through and prove nothing.
+ */
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+describe('the assessment whitelist carries the report sections', () => {
+  const src = readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '../src/lib/analysis.js'),
+    'utf8'
+  );
+  const validateReturn = src.slice(src.indexOf('const recommendation = INTERNAL_RECOMMENDATIONS'));
+
+  for (const field of [
+    'interview_score',
+    'interview_score_reasoning',
+    'jd_fit_summary',
+    'recommendation_score',
+    'recommendation_verdict',
+  ]) {
+    it(`passes ${field} through`, () => {
+      expect(validateReturn).toContain(`${field}:`);
+    });
+  }
+
+  it('asks the model for every field it then reads', () => {
+    // The tool schema's TOP-LEVEL required list - the one naming 'scores' -
+    // not the nested per-score one that appears earlier in the file.
+    const start = src.indexOf("required: [\n      'scores'");
+    expect(start).toBeGreaterThan(-1);
+    const required = src.slice(start, src.indexOf(']', start));
+
+    expect(required).toContain('interview_score');
+    expect(required).toContain('recommendation_score');
+    expect(required).toContain('jd_fit_summary');
+  });
+});

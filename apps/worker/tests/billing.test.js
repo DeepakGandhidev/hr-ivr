@@ -1,45 +1,55 @@
 import { describe, it, expect } from 'vitest';
-import { isBillableInterview, deriveCallStatus } from '../src/lib/callSession.js';
+import { deriveCallStatus } from '../src/lib/callSession.js';
+import { isBillableCall, billableMinutes } from '@pratibha/shared';
 import { TERMINAL } from '../src/lib/states.js';
 
-const base = { status: 'completed', recognised: true, producesReport: true, tenantId: 't1' };
+// One rule, in @pratibha/shared, so the worker that charges and the UI that
+// reports cannot disagree about what is billable. `minutes` joined the test
+// when pricing moved from per-interview to per-minute.
+const base = {
+  status: 'completed',
+  recognised: true,
+  producesReport: true,
+  tenantId: 't1',
+  minutes: 12,
+};
 
-describe('isBillableInterview — §2.8', () => {
+describe('isBillableCall — §2.8', () => {
   it('bills a completed call by a recognised candidate that produced a report', () => {
-    expect(isBillableInterview(base)).toBe(true);
+    expect(isBillableCall(base)).toBe(true);
   });
 
   // Each of these used to increment the meter: everything except an unknown
   // caller was billed, so a tenant paid ₹149 for calls that dropped in the
   // first ten seconds and produced no report.
   it('does not bill a mid-call drop', () => {
-    expect(isBillableInterview({ ...base, status: 'dropped', producesReport: false })).toBe(false);
+    expect(isBillableCall({ ...base, status: 'dropped', producesReport: false })).toBe(false);
   });
 
   it('does not bill an out-of-window call-back', () => {
-    expect(isBillableInterview({ ...base, status: 'out_of_window', producesReport: false })).toBe(false);
+    expect(isBillableCall({ ...base, status: 'out_of_window', producesReport: false })).toBe(false);
   });
 
   it('does not bill a consent decline', () => {
-    expect(isBillableInterview({ ...base, status: 'declined_consent', producesReport: false })).toBe(false);
+    expect(isBillableCall({ ...base, status: 'declined_consent', producesReport: false })).toBe(false);
   });
 
   it('does not bill an unknown caller', () => {
-    expect(isBillableInterview({ ...base, status: 'unknown_caller', recognised: false, producesReport: false })).toBe(false);
+    expect(isBillableCall({ ...base, status: 'unknown_caller', recognised: false, producesReport: false })).toBe(false);
   });
 
   // A repeat caller is short-circuited before any question is asked, so no
   // report is produced — §5 Stage 8 "Not billed twice".
   it('does not bill a repeat call by an already-interviewed candidate', () => {
-    expect(isBillableInterview({ ...base, producesReport: false })).toBe(false);
+    expect(isBillableCall({ ...base, producesReport: false })).toBe(false);
   });
 
   it('does not bill a completed call that somehow produced no report', () => {
-    expect(isBillableInterview({ ...base, producesReport: false })).toBe(false);
+    expect(isBillableCall({ ...base, producesReport: false })).toBe(false);
   });
 
   it('does not bill without a tenant', () => {
-    expect(isBillableInterview({ ...base, tenantId: undefined })).toBe(false);
+    expect(isBillableCall({ ...base, tenantId: undefined })).toBe(false);
   });
 });
 

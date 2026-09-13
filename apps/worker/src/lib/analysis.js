@@ -220,9 +220,13 @@ export class PostCallAnalyst {
         concerns: assessment.gaps,
         notableQuotes: {},
 
-        // Falls back to the criterion mean when the model omits the interview
-        // score, so section 1 is never blank on a report that has scores.
-        interviewScore: clampScore(assessment.interview_score) ?? overallScore,
+        // Falls back to the criterion mean when the model omits the score - but
+        // only when there were scores. With every criterion dropped by the
+        // evidence check the mean is 0, and publishing 0.0 asserts the worst
+        // possible interview when the truth is that nothing could be assessed.
+        // Null renders as "not recorded", which is what actually happened.
+        interviewScore:
+          clampScore(assessment.interview_score) ?? (assessment.scores.length ? overallScore : null),
         interviewScoreReasoning: assessment.interview_score_reasoning ?? null,
         jdFitSummary: assessment.jd_fit_summary ?? null,
         // No fallback: an invented overall verdict is worse than an absent one,
@@ -296,6 +300,18 @@ export class PostCallAnalyst {
       flags: input.flags ?? [],
       recommendation,
       recommendation_reasoning: input.recommendation_reasoning ?? '',
+
+      // The report's four sections. These have to be listed here: this function
+      // returns a fresh whitelisted object rather than a copy of the input, so
+      // a field the model produced but this list omits is silently discarded -
+      // which is exactly what happened to all five on the first live call after
+      // they were added.
+      interview_score: clampScore(input.interview_score),
+      interview_score_reasoning: input.interview_score_reasoning ?? null,
+      jd_fit_summary: input.jd_fit_summary ?? null,
+      recommendation_score: clampScore(input.recommendation_score),
+      recommendation_verdict: input.recommendation_verdict ?? null,
+
       dropped_scores: rejected.length
     };
   }

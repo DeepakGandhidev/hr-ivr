@@ -2,6 +2,7 @@ import { VoiceActivityDetector } from '../audio/vad.js';
 import { SarvamSTT } from '../audio/stt.js';
 import { createTTS } from '../audio/tts.js';
 import { STATES, TERMINAL, isVerified } from './states.js';
+import { billableMinutes, isBillableCall } from '@pratibha/shared';
 import { makeDisclosure } from './screening.js';
 import { toSpeech, splitSentences } from '../utils/speech.js';
 import { truncateToHeard } from './history.js';
@@ -509,10 +510,18 @@ export class CallSession {
       // recruiter with a score and no way to read what was said.
       const turns = session.transcript?.turns?.() ?? [];
 
+      // Pricing is per minute, charged from the first question to the end of
+      // the call. Computed once here and stored on the row so an invoice line
+      // can be reconciled against the call that produced it.
+      const endedAt = new Date();
+      const minutes = billableMinutes(session.firstQuestionAt, endedAt);
+
       await updateInterviewCall(session.interviewCallId, {
-        endedAt: new Date(),
+        endedAt,
         language: session.language ?? null,
         status,
+        firstQuestionAt: session.firstQuestionAt ?? null,
+        billableMinutes: minutes,
         ...(turns.length ? { transcript: turns } : {}),
         telephonyCost: 0,
         llmCostUsd,
@@ -526,15 +535,16 @@ export class CallSession {
       // questions or never yields a report, so `producesReport` covers them
       // all; `status` is checked too so a completed-but-reportless call cannot
       // slip through.
-      const billable = isBillableInterview({
+      const billable = isBillableCall({
         status,
         recognised: session.recognised,
         producesReport,
         tenantId: session.tenant?.id,
+        minutes,
       });
 
       if (billable) {
-        await incrementInterviewUsage(session.tenant.id).catch(err =>
+        await incrementInterviewUsage(session.tenant.id, minutes).catch(err =>
           this.logger.error({ err: err.message }, 'Interview usage increment failed'));
       } else {
         this.logger.info({
@@ -542,6 +552,7 @@ export class CallSession {
           status,
           recognised: session.recognised,
           questionsAsked: session.questionsAsked,
+          minutes,
         }, 'Call not billed');
       }
     }
@@ -634,19 +645,6 @@ export function isWithinCallWindow(callWindows, now = new Date()) {
 
 function estimateLlmCostUsd(inputTokens, outputTokens) {
   return Number(((inputTokens || 0) * 0.00000025 + (outputTokens || 0) * 0.00000125).toFixed(6));
-}
-
-/**
- * 2.8: a billable "AI interview" is a completed inbound call with a recognised,
- * shortlisted candidate that produces an assessment report. Everything else —
- * unknown caller, out of window, consent declined, mid-call drop, and a repeat
- * call by someone already interviewed — is explicitly not billed.
- *
- * `producesReport` must be the same value used to decide whether the post-call
- * analyst runs, so a tenant is never charged for a call that yielded no report.
- */
-export function isBillableInterview({ status, recognised, producesReport, tenantId }) {
-  return Boolean(producesReport) && status === 'completed' && Boolean(recognised) && Boolean(tenantId);
 }
 
 export function deriveCallStatus(session) {

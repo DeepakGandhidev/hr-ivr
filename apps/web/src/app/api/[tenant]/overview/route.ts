@@ -2,7 +2,12 @@ import { NextRequest } from "next/server";
 import { Action } from "@pratibha/shared";
 import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
-import { currentUsagePeriod, interviewLimit, screeningLimit } from "@/lib/billing";
+import {
+  currentUsagePeriod,
+  interviewLimit,
+  interviewMinuteLimit,
+  screeningLimit,
+} from "@/lib/billing";
 
 export const runtime = "nodejs";
 
@@ -291,6 +296,9 @@ export async function GET(
         },
         usage: {
           period: currentUsagePeriod(),
+          // Minutes are the billed unit; the interview figures are descriptive.
+          interviewMinutesUsed: meter?.interviewMinutesUsed ?? 0,
+          interviewMinuteLimit: interviewMinuteLimit(ctx.tenant),
           interviewsUsed: meter?.interviewsUsed ?? 0,
           interviewLimit: interviewLimit(ctx.tenant),
           screeningsUsed: meter?.screeningsUsed ?? 0,

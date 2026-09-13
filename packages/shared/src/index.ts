@@ -5,3 +5,4 @@ export * from './limits.js';
 export * from './validation.js';
 export * from './audit.js';
 export * from './candidateStatus.js';
+export * from './interviewMinutes.js';

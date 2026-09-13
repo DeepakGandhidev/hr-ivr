@@ -88,6 +88,8 @@ interface Overview {
   };
   usage: {
     period: string;
+    interviewMinutesUsed: number;
+    interviewMinuteLimit: number | null;
     interviewsUsed: number;
     interviewLimit: number | null;
     screeningsUsed: number;

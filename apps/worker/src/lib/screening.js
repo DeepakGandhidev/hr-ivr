@@ -337,7 +337,16 @@ TOOLS AVAILABLE TO YOU RIGHT NOW: ${this.tools.definitionsFor(session.state).map
     if (reply) {
       session.history.push({ role: 'assistant', content: reply });
       spoke = true;
-      if (session.state === STATES.SCREEN) session.questionsAsked++;
+      if (session.state === STATES.SCREEN) {
+        session.questionsAsked++;
+        // The billing clock starts here, on the first question actually asked.
+        if (!session.firstQuestionAt) {
+          session.firstQuestionAt = new Date();
+          session.transcript?.record('interview.billing_start', {
+            questionsAsked: session.questionsAsked,
+          });
+        }
+      }
     }
 
     const toolUse = response.content.find(c => c.type === 'tool_use') ?? null;

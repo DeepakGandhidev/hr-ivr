@@ -612,6 +612,15 @@ model InterviewCall {
   /// portal had nothing to show. On the call row it inherits the tenant
   /// isolation and the delete cascade the candidate's record already has.
   transcript      Json?
+  /// When the first question was put. Billing runs from here, not from when
+  /// the phone was answered: greeting, disclosure, identity and consent are
+  /// deliberately not charged for, and that is what customers are told.
+  firstQuestionAt DateTime?             @map("first_question_at")
+  /// What this call was billed, in whole minutes. Stored rather than derived so
+  /// an invoice can be reconciled against the call that produced it, even if
+  /// the rounding rule changes later.
+  billableMinutes Int?                  @map("billable_minutes")
+
   telephonyCost   Float?                @map("telephony_cost")
   llmCostUsd      Float?                @map("llm_cost_usd")
   ttsCostUsd      Float?                @map("tts_cost_usd")
@@ -680,9 +689,14 @@ model UsageMeter {
   id                  String   @id @default(cuid())
   tenantId            String   @map("tenant_id")
   period              String   // YYYY-MM
+  /// Retained so historical periods still read correctly, and because the UI
+  /// shows an approximate interview count beside the minutes. Not the quota.
   interviewsUsed      Int      @default(0) @map("interviews_used")
+  /// The quota that is actually enforced and billed. Pricing is per minute.
+  interviewMinutesUsed Int     @default(0) @map("interview_minutes_used")
   screeningsUsed      Int      @default(0) @map("screenings_used")
   overageInterviews   Int      @default(0) @map("overage_interviews")
+  overageMinutes      Int      @default(0) @map("overage_minutes")
   overageScreenings   Int      @default(0) @map("overage_screenings")
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")

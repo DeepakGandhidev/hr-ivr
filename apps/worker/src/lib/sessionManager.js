@@ -47,6 +47,10 @@ export class SessionManager {
       codeAttempts: 0,
       dtmfBuffer: '',
       questionsAsked: 0,
+      /// Set when the first question is put. Billing runs from this moment, not
+      /// from when the call connected - greeting, disclosure, identity and
+      /// consent are deliberately unbilled.
+      firstQuestionAt: null,
       transcript: null,
       ended: false,
 

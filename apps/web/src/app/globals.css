@@ -910,3 +910,31 @@ a.stat:hover { border-color: var(--border-strong); text-decoration: none; box-sh
 .qa-question:hover { background: var(--surface-2); }
 .qa-caret { color: var(--text-subtle); flex: none; }
 .qa-answer { padding: 10px 11px; border-top: 1px solid var(--border); background: var(--surface-2); }
+
+/* --- usage meter warnings --------------------------------------------------- */
+
+.usage-meter .usage-note {
+  font-size: 0.75rem;
+  color: var(--text-subtle);
+  margin-top: 2px;
+}
+
+.usage-meter .fill.warning { background: var(--warning); }
+.usage-meter .fill.exhausted { background: var(--danger); }
+
+.usage-warning {
+  margin-top: 6px;
+  padding: 5px 7px;
+  border-radius: var(--radius-sm, 6px);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  background: var(--warning-soft);
+  color: var(--warning);
+  border: 1px solid var(--warning-border);
+}
+
+.usage-warning.exhausted {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: var(--danger-border);
+}

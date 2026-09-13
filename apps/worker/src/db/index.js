@@ -255,6 +255,8 @@ export async function updateInterviewCall(id, payload) {
       ...(payload.status !== undefined && { status: payload.status }),
       ...(payload.recordingRef !== undefined && { recordingRef: payload.recordingRef }),
       ...(payload.transcriptRef !== undefined && { transcriptRef: payload.transcriptRef }),
+      ...(payload.firstQuestionAt !== undefined && { firstQuestionAt: payload.firstQuestionAt }),
+      ...(payload.billableMinutes !== undefined && { billableMinutes: payload.billableMinutes }),
       ...(payload.transcript !== undefined && { transcript: payload.transcript }),
       ...(payload.telephonyCost !== undefined && { telephonyCost: payload.telephonyCost }),
       ...(payload.llmCostUsd !== undefined && { llmCostUsd: payload.llmCostUsd }),
@@ -327,11 +329,28 @@ export async function incrementScreeningUsage(tenantId, period = currentPeriod()
   });
 }
 
-export async function incrementInterviewUsage(tenantId, period = currentPeriod()) {
+/**
+ * Record a billed call against the month's meter.
+ *
+ * Minutes are the quota; the interview count rides along because the UI shows
+ * an approximate interview figure beside the minutes, and because historical
+ * periods should keep reading correctly.
+ */
+export async function incrementInterviewUsage(tenantId, minutes, period = currentPeriod()) {
+  const billed = Math.max(0, Math.round(Number(minutes) || 0));
+
   return prisma.usageMeter.upsert({
     where: { tenantId_period: { tenantId, period } },
-    update: { interviewsUsed: { increment: 1 } },
-    create: { tenantId, period, interviewsUsed: 1 },
+    update: {
+      interviewsUsed: { increment: 1 },
+      interviewMinutesUsed: { increment: billed },
+    },
+    create: {
+      tenantId,
+      period,
+      interviewsUsed: 1,
+      interviewMinutesUsed: billed,
+    },
   });
 }
 

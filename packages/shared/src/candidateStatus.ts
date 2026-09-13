@@ -108,7 +108,7 @@ export async function advanceCandidateStatus(
 
   await db.candidate.update({ where: { id: candidateId }, data: { status: to } });
 
-  await writeAuditLog(db as PrismaClient, {
+  await writeAuditLog(db, {
     tenantId,
     actor,
     action: 'candidate.status',
@@ -149,7 +149,7 @@ export async function setCandidateStatusManually(
 
   await db.candidate.update({ where: { id: candidateId }, data: { status: to } });
 
-  await writeAuditLog(db as PrismaClient, {
+  await writeAuditLog(db, {
     tenantId,
     actor,
     action: 'candidate.status',

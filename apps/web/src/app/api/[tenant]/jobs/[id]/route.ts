@@ -1,5 +1,11 @@
 import { NextRequest } from "next/server";
-import { Action, createJobSchema, NotFoundError, ValidationError } from "@pratibha/shared";
+import {
+  Action,
+  createJobSchema,
+  NotFoundError,
+  ValidationError,
+  writeAuditLog,
+} from "@pratibha/shared";
 import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { z } from "zod";
@@ -7,6 +13,11 @@ import { z } from "zod";
 const updateJobSchema = createJobSchema.partial().extend({
   /// Optional note explaining the edit, stored on the version it creates.
   changeNote: z.string().trim().max(500).optional(),
+  /// The job description body. Sent from the same edit form as the structured
+  /// fields so one save is one transaction: a JD saved while the structured
+  /// write failed would leave the posting describing a role that no longer
+  /// matches its own requirements.
+  bodyMd: z.string().max(50_000).optional(),
 });
 
 /** The fields a JobVersion snapshots, read off a job row. */
@@ -111,6 +122,43 @@ export async function PATCH(
         },
       });
 
+      // A new JD version, in the same transaction as the structured snapshot.
+      //
+      // Written only when the text actually changed: the edit form always sends
+      // the body, so comparing against the current version is what stops every
+      // salary-band tweak from creating an identical JD version and burying the
+      // real edits in the history.
+      let description = null;
+      if (data.bodyMd !== undefined) {
+        const currentJd = await tx.jobDescription.findFirst({
+          where: { jobId: id },
+          orderBy: { version: "desc" },
+        });
+
+        const next = data.bodyMd.trim();
+        if (next && next !== (currentJd?.bodyMd ?? "").trim()) {
+          description = await tx.jobDescription.create({
+            data: {
+              jobId: id,
+              version: (currentJd?.version ?? 0) + 1,
+              bodyMd: next,
+              generatedBy: "human",
+            },
+          });
+
+          await writeAuditLog(tx, {
+            tenantId: ctx.tenant.id,
+            actor: ctx.user.id,
+            action: "job.description.edited",
+            entity: "job",
+            entityId: id,
+            before: { version: currentJd?.version ?? null },
+            after: { version: description.version },
+            reason: data.changeNote,
+          });
+        }
+      }
+
       const job = await tx.job.update({
         where: { id },
         data: {
@@ -128,6 +176,7 @@ export async function PATCH(
       // it silently would push an unreviewed change to a public careers page.
       return {
         job,
+        description,
         requiresRepublish: existing.posts.length > 0,
         livePostings: existing.posts.map((p) => ({ channel: p.channel, postedAt: p.postedAt })),
       };

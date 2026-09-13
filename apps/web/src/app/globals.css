@@ -709,3 +709,48 @@ a.stat:hover { border-color: var(--border-strong); text-decoration: none; box-sh
   font-size: 0.8125rem;
   color: var(--danger);
 }
+
+/* --- markdown editor -------------------------------------------------------- */
+
+.md-editor {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.md-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.md-editor textarea {
+  border: 0;
+  border-radius: 0;
+  width: 100%;
+  display: block;
+}
+
+.md-editor textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.md-preview {
+  padding: 12px 14px;
+  min-height: 12rem;
+  line-height: 1.55;
+}
+
+.md-preview h3 { margin: 1em 0 0.35em; font-size: 1.05rem; }
+.md-preview h4 { margin: 1em 0 0.35em; font-size: 0.95rem; }
+.md-preview p { margin: 0 0 0.75em; }
+.md-preview ul,
+.md-preview ol { margin: 0 0 0.75em; padding-left: 1.35rem; }
+.md-preview li { margin-bottom: 0.2em; }
+.md-preview > :first-child { margin-top: 0; }

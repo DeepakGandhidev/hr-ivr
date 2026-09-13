@@ -820,3 +820,93 @@ a.stat:hover { border-color: var(--border-strong); text-decoration: none; box-sh
   max-height: 82vh;
   overflow-y: auto;
 }
+
+/* --- interview report ------------------------------------------------------- */
+
+.report-head {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.report-section {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.report-section:last-child { border-bottom: 0; padding-bottom: 0; }
+
+.report-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.report-section-title {
+  margin: 0 0 10px;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.report-section-head .report-section-title { margin-bottom: 0; margin-right: auto; }
+
+.report-score-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.score.lg { font-size: 1.6rem; font-weight: 680; }
+
+.report-prose {
+  margin: 0;
+  line-height: 1.6;
+  max-width: 42rem;
+}
+
+.report-sub {
+  margin: 0 0 5px;
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.report-list { margin: 0; padding-left: 1.15rem; line-height: 1.55; }
+.report-list li { margin-bottom: 0.25em; }
+
+.report-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 16px;
+}
+
+/* The verdict is the thing people scroll to; it gets a little weight. */
+.report-verdict { background: var(--surface-2); margin: 0 -16px -16px; padding: 16px; border-radius: 0 0 var(--radius) var(--radius); }
+
+.qa-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+
+.qa-item { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+
+.qa-question {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: 0;
+  padding: 9px 11px;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1.45;
+}
+
+.qa-question:hover { background: var(--surface-2); }
+.qa-caret { color: var(--text-subtle); flex: none; }
+.qa-answer { padding: 10px 11px; border-top: 1px solid var(--border); background: var(--surface-2); }

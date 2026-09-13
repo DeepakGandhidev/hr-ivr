@@ -63,13 +63,82 @@ const SCHEMA = {
         }
       },
       recommendation: { type: 'string', enum: INTERNAL_RECOMMENDATIONS },
-      recommendation_reasoning: { type: 'string' }
+      recommendation_reasoning: { type: 'string' },
+
+      // The two scores are separate and may disagree: the first judges the
+      // conversation, the second the whole picture. Asked for explicitly rather
+      // than derived, because "interviewed well but does not fit the role" is
+      // precisely the case a single averaged number destroys.
+      interview_score: {
+        type: 'number', minimum: 0, maximum: 10,
+        description: 'How the interview itself went, 0-10. Judges the answers given, not CV fit.'
+      },
+      interview_score_reasoning: {
+        type: 'string',
+        description: 'Why that interview score, referring to what the candidate actually said.'
+      },
+      jd_fit_summary: {
+        type: 'string',
+        description: "How this candidate meets THIS role's stated requirements, one by one, on evidence."
+      },
+      recommendation_score: {
+        type: 'number', minimum: 0, maximum: 10,
+        description: 'Overall verdict across JD requirements, CV screening and interview, 0-10.'
+      },
+      recommendation_verdict: {
+        type: 'string',
+        description: 'A short, direct verdict consistent with recommendation_score.'
+      }
     },
-    required: ['scores', 'recommendation', 'recommendation_reasoning', 'strengths', 'gaps']
+    required: [
+      'scores', 'recommendation', 'recommendation_reasoning', 'strengths', 'gaps',
+      'interview_score', 'interview_score_reasoning', 'jd_fit_summary',
+      'recommendation_score', 'recommendation_verdict'
+    ]
   }
 };
 
 const normalise = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+/** A score the model may have omitted, fumbled or put out of range. */
+function clampScore(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Number(Math.min(10, Math.max(0, n)).toFixed(1));
+}
+
+/**
+ * Question-and-answer pairs, read off the transcript.
+ *
+ * Derived rather than generated. The conversation is already recorded, so
+ * asking the model to reproduce it would risk questions she never asked
+ * appearing in the report as though she had - in the one section a hiring
+ * manager reads precisely to check what was really said.
+ *
+ * A "question" is a Pratibha turn; the answer is the candidate turn that
+ * followed it. Turns she takes without a reply (the greeting, the closing) have
+ * no answer and are dropped: they are in the transcript, and section 2 is for
+ * the questions.
+ */
+export function pairQuestionsAndAnswers(turns) {
+  const pairs = [];
+
+  for (let i = 0; i < turns.length; i++) {
+    const turn = turns[i];
+    if (turn.speaker !== 'pratibha') continue;
+
+    const answer = turns[i + 1];
+    if (!answer || answer.speaker !== 'candidate') continue;
+
+    pairs.push({
+      question: turn.text,
+      answer: answer.text,
+      atMs: turn.atMs ?? 0,
+    });
+  }
+
+  return pairs;
+}
 
 export class PostCallAnalyst {
   constructor(config, logger, deps = {}) {
@@ -131,6 +200,11 @@ export class PostCallAnalyst {
         ? Number((assessment.scores.reduce((a, s) => a + s.score, 0) / assessment.scores.length).toFixed(2))
         : 0;
 
+      // Question-and-answer pairs come from the transcript that was actually
+      // recorded, not from the model. The conversation is already on record, and
+      // asking for it back invites questions she never asked.
+      const questionAnswers = pairQuestionsAndAnswers(session.transcript?.turns?.() ?? []);
+
       await this.saveReport({
         interviewCallId: session.interviewCallId,
         overallScore,
@@ -145,6 +219,17 @@ export class PostCallAnalyst {
         strengths: assessment.strengths,
         concerns: assessment.gaps,
         notableQuotes: {},
+
+        // Falls back to the criterion mean when the model omits the interview
+        // score, so section 1 is never blank on a report that has scores.
+        interviewScore: clampScore(assessment.interview_score) ?? overallScore,
+        interviewScoreReasoning: assessment.interview_score_reasoning ?? null,
+        jdFitSummary: assessment.jd_fit_summary ?? null,
+        // No fallback: an invented overall verdict is worse than an absent one,
+        // and the page says so rather than showing a number nothing produced.
+        recommendationScore: clampScore(assessment.recommendation_score),
+        recommendationVerdict: assessment.recommendation_verdict ?? null,
+        questionAnswers,
       }).catch(err => this.logger.error({ err: err.message }, 'Assessment report save failed'));
     }
 

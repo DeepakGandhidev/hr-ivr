@@ -642,6 +642,31 @@ model AssessmentReport {
   notableQuotes     Json              @map("notable_quotes")
   generatedAt       DateTime          @default(now()) @map("generated_at")
 
+  // --- The report as the recruiter reads it -------------------------------
+  //
+  // Two scores, deliberately separate and allowed to disagree. `interviewScore`
+  // is how the conversation went; `recommendationScore` is the verdict on the
+  // whole picture - JD, CV screening and interview together. Somebody can
+  // interview well and screen badly, and collapsing that into one number is
+  // exactly the information a hiring manager needs and would lose.
+
+  /// Section 1: how the interview itself went, 0-10.
+  interviewScore          Float?   @map("interview_score")
+  /// Why that score, written out. A number with no argument cannot be checked.
+  interviewScoreReasoning String?  @map("interview_score_reasoning")
+
+  /// Section 2: question-and-answer pairs, derived from the stored transcript
+  /// rather than asked of the model - the conversation is already on record,
+  /// and regenerating it invites invented questions.
+  questionAnswers         Json?    @map("question_answers")
+
+  /// Section 3: how this candidate fits this role's actual requirements.
+  jdFitSummary            String?  @map("jd_fit_summary")
+
+  /// Section 4: the overall verdict, 0-10, across screening and interview.
+  recommendationScore     Float?   @map("recommendation_score")
+  recommendationVerdict   String?  @map("recommendation_verdict")
+
   interviewCall     InterviewCall     @relation(fields: [interviewCallId], references: [id], onDelete: Cascade)
 
   @@map("assessment_reports")

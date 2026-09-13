@@ -274,6 +274,12 @@ export async function createAssessmentReport(payload) {
       strengths: payload.strengths ?? [],
       concerns: payload.concerns ?? [],
       notableQuotes: payload.notableQuotes ?? {},
+      interviewScore: payload.interviewScore ?? null,
+      interviewScoreReasoning: payload.interviewScoreReasoning ?? null,
+      jdFitSummary: payload.jdFitSummary ?? null,
+      recommendationScore: payload.recommendationScore ?? null,
+      recommendationVerdict: payload.recommendationVerdict ?? null,
+      questionAnswers: payload.questionAnswers ?? [],
     },
   });
 

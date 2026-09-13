@@ -160,9 +160,13 @@ describe("cancellation", () => {
     expect(route).toContain("CANCEL_REASONS");
   });
 
+  // Defined once in the lib and imported, so the API, the page and the
+  // cancellation dialog cannot state different consequences.
   it("states the data consequences in one place", () => {
     expect(route).toContain("DATA_CONSEQUENCES");
-    expect(route).toContain("deletedAfterDays: 30");
+    const lib = read("src/lib/subscription.ts");
+    expect(lib).toContain("deletedAfterDays: 30");
+    expect(lib).toContain("readOnlyAfterExpiry: true");
   });
 });
 

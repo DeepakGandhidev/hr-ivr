@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { Action, NotFoundError } from "@pratibha/shared";
+import { Action, NotFoundError, advanceCandidateStatus } from "@pratibha/shared";
 import { authorizeTenant } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { assertScreeningQuota, currentUsagePeriod } from "@/lib/billing";
@@ -116,6 +116,30 @@ export async function POST(
             candidateId: id,
             addedBy: ctx.user.id,
           },
+        });
+      }
+
+      // The candidate's pipeline position follows the events that just
+      // happened, in the order they happened: screened first, then shortlisted
+      // if the verdict put them there. advanceCandidateStatus only ever moves
+      // forward and refuses to overwrite a manual judgement, so re-screening
+      // somebody already marked Hired leaves them Hired.
+      //
+      // Note this sets a label and nothing else. No approval row is created
+      // here, so nothing about it reaches the candidate.
+      await advanceCandidateStatus(db, {
+        tenantId: ctx.tenant.id,
+        candidateId: id,
+        to: "screened",
+        reason: "CV screening completed",
+      });
+
+      if (result.verdict === "shortlist") {
+        await advanceCandidateStatus(db, {
+          tenantId: ctx.tenant.id,
+          candidateId: id,
+          to: "shortlisted",
+          reason: "Screening verdict placed them on the draft shortlist",
         });
       }
 

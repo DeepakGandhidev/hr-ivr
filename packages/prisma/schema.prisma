@@ -297,6 +297,24 @@ model JobPost {
 // Candidates & screening
 // ---------------------------------------------------------------------------
 
+/// Where a candidate stands in the pipeline.
+///
+/// One field, deliberately: a board view added later reads this rather than
+/// deriving a second state machine from screenings, shortlist rows and reports.
+///
+/// The first four are reached on their own as those events happen. The last
+/// three are judgements and are only ever set by a person - nothing in the
+/// system infers that someone was hired.
+enum CandidateStatus {
+  inbox
+  screened
+  shortlisted
+  interviewed
+  advance_stage
+  hired
+  rejected
+}
+
 model Candidate {
   id                String   @id @default(cuid())
   tenantId          String   @map("tenant_id")
@@ -309,6 +327,13 @@ model Candidate {
   sourceEmailMsgId  String?  @unique @map("source_email_msg_id")
   parseFailed       Boolean  @default(false) @map("parse_failed")
   noPhone           Boolean  @default(false) @map("no_phone")
+
+  /// Pipeline position. Automatic progression only moves forward and never
+  /// overwrites a manual judgement - see `advanceCandidateStatus` in
+  /// @pratibha/shared. Who changed it, from what and when lives in AuditLog
+  /// under the `candidate.status` action, which is what the activity timeline
+  /// renders.
+  status            CandidateStatus @default(inbox)
 
   /// How this candidate reached this job: 'auto' (matched by the router),
   /// 'fallback' (matched nothing, filed in the mailbox's fallback job),
@@ -332,6 +357,8 @@ model Candidate {
   @@unique([tenantId, jobId, phoneE164])
   @@index([tenantId, phoneE164])
   @@index([tenantId, jobId, email])
+  // The candidates list filters and groups by status within a job.
+  @@index([tenantId, jobId, status])
   @@map("candidates")
 }
 

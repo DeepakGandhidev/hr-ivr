@@ -35,6 +35,7 @@ export enum Action {
   candidateCreate = 'candidate:create',
   candidateUpdate = 'candidate:update',
   candidateScreen = 'candidate:screen',
+  candidateStatus = 'candidate:status',
 
   // Shortlists
   shortlistRead = 'shortlist:read',
@@ -76,6 +77,10 @@ const PERMISSIONS: Record<Action, UserRole> = {
   // placement for the old role, so it sits with the other candidate writes.
   [Action.candidateUpdate]: UserRole.admin,
   [Action.candidateScreen]: UserRole.admin,
+  // Moving someone along the pipeline is the reviewer's daily work, and sits
+  // with shortlisting rather than with the admin-only candidate writes: it
+  // changes a label, not the candidate record or which job they belong to.
+  [Action.candidateStatus]: UserRole.reviewer,
 
   [Action.shortlistRead]: UserRole.viewer,
   [Action.shortlistEdit]: UserRole.reviewer,

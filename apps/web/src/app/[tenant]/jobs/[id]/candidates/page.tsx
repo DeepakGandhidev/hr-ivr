@@ -5,12 +5,17 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import AddCandidates from "@/components/AddCandidates";
 import EmailCandidate from "@/components/EmailCandidate";
+import ScreeningDetail from "@/components/ScreeningDetail";
+import { CandidateStatusBadge } from "@/components/CandidateStatus";
+import type { CandidateStatus } from "@pratibha/shared";
 
 interface Screening {
   id: string;
   score: number;
   verdict: string;
   reasonSummary: string;
+  matchedMustHaves: string[] | null;
+  gaps: string[] | null;
   createdAt: string;
 }
 
@@ -28,7 +33,13 @@ interface Candidate {
   parseFailed?: boolean;
   cvParsed?: Record<string, unknown> | null;
   createdAt: string;
+  status: CandidateStatus;
   screenings: Screening[];
+  shortlistItems: Array<{
+    id: string;
+    finalState: string | null;
+    shortlist: { id: string; status: string };
+  }>;
 }
 
 export default function CandidatesPage({ params }: { params: { tenant: string; id: string } }) {
@@ -43,6 +54,8 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
   const [emailing, setEmailing] = useState<Candidate | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [moving, setMoving] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<{ candidate: Candidate; screening: Screening } | null>(null);
+  const [shortlisting, setShortlisting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -69,6 +82,39 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
       .then((d) => setJobs(d.jobs ?? []))
       .catch(() => {});
   }, [tenant]);
+
+  /**
+   * Add or remove one candidate from this job's draft shortlist.
+   *
+   * The draft shortlist only. This sends nothing to the candidate: outreach
+   * needs an approval row, which is a separate deliberate step, and no part of
+   * this touches it.
+   */
+  async function toggleShortlist(candidate: Candidate, add: boolean) {
+    setShortlisting(candidate.id);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/${tenant}/shortlists`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidateId: candidate.id, action: add ? "add" : "remove" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "Could not update the shortlist");
+
+      await load();
+      setMessage(
+        add
+          ? `${candidate.name ?? "Candidate"} added to the draft shortlist. Nothing has been sent to them.`
+          : `${candidate.name ?? "Candidate"} removed from the draft shortlist.`
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not update the shortlist");
+    } finally {
+      setShortlisting(null);
+    }
+  }
 
   async function moveCandidate(candidateId: string, jobId: string) {
     setMoving(candidateId);
@@ -213,6 +259,7 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
                   <th>Phone</th>
                   <th>Score</th>
                   <th>Verdict</th>
+                  <th>Status</th>
                   <th>Reason</th>
                   <th></th>
                 </tr>
@@ -220,6 +267,12 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
               <tbody>
                 {candidates.map((candidate) => {
                   const latest = candidate.screenings[0];
+                  // On the shortlist means having a row that has not been
+                  // removed. Removal is recorded rather than deleted, so the
+                  // presence of a row is not the answer on its own.
+                  const onShortlist = candidate.shortlistItems.some(
+                    (item) => item.finalState !== "removed"
+                  );
                   return (
                     <tr key={candidate.id}>
                       <td>
@@ -253,8 +306,24 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
                           <span className="badge badge-neutral">not screened</span>
                         )}
                       </td>
-                      <td className="subtle" style={{ maxWidth: 280 }}>
-                        {latest?.reasonSummary ?? "—"}
+                      <td>
+                        <CandidateStatusBadge status={candidate.status} />
+                      </td>
+                      <td>
+                        {/* The full reason used to be printed into the row,
+                            which made every row a different height and the
+                            table unreadable at a glance. It moves to a popup
+                            that truncates nothing. */}
+                        {latest ? (
+                          <button
+                            className="sm ghost"
+                            onClick={() => setViewing({ candidate, screening: latest })}
+                          >
+                            View
+                          </button>
+                        ) : (
+                          <span className="subtle">—</span>
+                        )}
                       </td>
                       <td style={{ textAlign: "right" }}>
                         <div className="row" style={{ gap: 6, justifyContent: "flex-end", flexWrap: "nowrap" }}>
@@ -279,6 +348,22 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
                                 </option>
                               ))}
                           </select>
+                          <button
+                            className={onShortlist ? "sm ghost" : "sm"}
+                            title={
+                              onShortlist
+                                ? "Remove from the draft shortlist"
+                                : "Add to the draft shortlist. Nothing is sent to the candidate."
+                            }
+                            onClick={() => toggleShortlist(candidate, !onShortlist)}
+                            disabled={shortlisting === candidate.id || Boolean(bulk)}
+                          >
+                            {shortlisting === candidate.id
+                              ? "…"
+                              : onShortlist
+                                ? "Shortlisted ✓"
+                                : "Shortlist"}
+                          </button>
                           <button
                             className="sm"
                             onClick={() => setEmailing(candidate)}
@@ -307,6 +392,14 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
             </table>
           </div>
         </div>
+      )}
+
+      {viewing && (
+        <ScreeningDetail
+          who={viewing.candidate.name || viewing.candidate.email || "Candidate"}
+          screening={viewing.screening}
+          onClose={() => setViewing(null)}
+        />
       )}
 
       {emailing && (

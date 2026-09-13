@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Action, NotFoundError, ValidationError, writeAuditLog } from "@pratibha/shared";
+import {
+  Action,
+  CANDIDATE_STATUSES,
+  CANDIDATE_STATUS_LABELS,
+  NotFoundError,
+  ValidationError,
+  writeAuditLog,
+  type CandidateStatus,
+} from "@pratibha/shared";
 import { adminPrisma, type PrismaClient } from "@pratibha/prisma";
 import { authorizeTenant } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
@@ -183,14 +191,47 @@ export async function GET(
         throw new NotFoundError("Candidate not found");
       }
 
-      return { candidate, timeline: buildTimeline(candidate) };
+      // Status changes are the one part of the history that is not derivable
+      // from a row somewhere: the candidate carries only its current status, so
+      // who moved it and when lives in the audit log. Actors are resolved to
+      // names here rather than in the client, which has no way to look up a
+      // user id.
+      const statusChanges = await db.auditLog.findMany({
+        where: { action: "candidate.status", entity: "candidate", entityId: id },
+        orderBy: { createdAt: "desc" },
+        select: { actor: true, before: true, after: true, reason: true, createdAt: true },
+      });
+
+      const actorIds = Array.from(
+        new Set(statusChanges.map((c) => c.actor).filter((a) => a !== "system"))
+      );
+      const actors = actorIds.length
+        ? await db.user.findMany({
+            where: { id: { in: actorIds } },
+            select: { id: true, name: true, email: true },
+          })
+        : [];
+      const actorNames = new Map(actors.map((u) => [u.id, u.name ?? u.email]));
+
+      return {
+        candidate,
+        timeline: buildTimeline(candidate, statusChanges, actorNames),
+      };
     });
   });
 }
 
 type TimelineEvent = {
   at: string;
-  kind: "applied" | "screened" | "shortlisted" | "approved" | "invited" | "called" | "reported";
+  kind:
+    | "applied"
+    | "screened"
+    | "shortlisted"
+    | "approved"
+    | "invited"
+    | "called"
+    | "reported"
+    | "status";
   title: string;
   detail: string;
 };
@@ -220,7 +261,16 @@ function buildTimeline(c: {
     status: string | null;
     assessmentReport: { overallScore: number; recommendation: string; generatedAt: Date } | null;
   }>;
-}): TimelineEvent[] {
+},
+  statusChanges: Array<{
+    actor: string;
+    before: unknown;
+    after: unknown;
+    reason: string | null;
+    createdAt: Date;
+  }> = [],
+  actorNames: Map<string, string> = new Map()
+): TimelineEvent[] {
   const events: TimelineEvent[] = [];
 
   events.push({
@@ -283,5 +333,36 @@ function buildTimeline(c: {
     }
   }
 
+  for (const change of statusChanges) {
+    const from = statusOf(change.before);
+    const to = statusOf(change.after);
+    if (!to) continue;
+
+    const who =
+      change.actor === "system" ? "Automatically" : `By ${actorNames.get(change.actor) ?? "a teammate"}`;
+
+    events.push({
+      at: change.createdAt.toISOString(),
+      kind: "status",
+      title: from
+        ? `Status: ${labelFor(from)} → ${labelFor(to)}`
+        : `Status set to ${labelFor(to)}`,
+      detail: change.reason ? `${who} — ${change.reason}` : who,
+    });
+  }
+
   return events.sort((a, b) => b.at.localeCompare(a.at));
+}
+
+/** Audit `before`/`after` are free-form JSON; only a known status is read out. */
+function statusOf(payload: unknown): CandidateStatus | null {
+  if (!payload || typeof payload !== "object") return null;
+  const value = (payload as { status?: unknown }).status;
+  return typeof value === "string" && (CANDIDATE_STATUSES as readonly string[]).includes(value)
+    ? (value as CandidateStatus)
+    : null;
+}
+
+function labelFor(status: CandidateStatus): string {
+  return CANDIDATE_STATUS_LABELS[status];
 }

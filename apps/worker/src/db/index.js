@@ -1,4 +1,5 @@
 import { prisma } from '@pratibha/prisma';
+import { advanceCandidateStatus } from '@pratibha/shared';
 import { emailsMatch, normaliseSpokenEmail } from '../lib/emailMatch.js';
 
 // Worker queries cross tenant boundaries for caller recognition, so this process
@@ -263,7 +264,7 @@ export async function updateInterviewCall(id, payload) {
 }
 
 export async function createAssessmentReport(payload) {
-  return prisma.assessmentReport.create({
+  const report = await prisma.assessmentReport.create({
     data: {
       interviewCallId: payload.interviewCallId,
       overallScore: payload.overallScore,
@@ -274,6 +275,33 @@ export async function createAssessmentReport(payload) {
       notableQuotes: payload.notableQuotes ?? {},
     },
   });
+
+  // "Interviewed" means the call happened AND produced a report, which is the
+  // same bar billing uses - so it is set here, where the report lands, rather
+  // than when the call ends. A call that never yields a report leaves the
+  // candidate where they were.
+  //
+  // Never allowed to fail the report: the assessment is the artifact worth
+  // keeping, and a status label is not worth losing it over.
+  try {
+    const call = await prisma.interviewCall.findUnique({
+      where: { id: payload.interviewCallId },
+      select: { candidate: { select: { id: true, tenantId: true } } },
+    });
+
+    if (call?.candidate) {
+      await advanceCandidateStatus(prisma, {
+        tenantId: call.candidate.tenantId,
+        candidateId: call.candidate.id,
+        to: 'interviewed',
+        reason: 'Interview completed and assessment report generated',
+      });
+    }
+  } catch {
+    // Left to the next event to correct; the report itself is already saved.
+  }
+
+  return report;
 }
 
 export async function getOrCreateUsageMeter(tenantId, period = currentPeriod()) {

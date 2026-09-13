@@ -681,3 +681,31 @@ a.stat:hover { border-color: var(--border-strong); text-decoration: none; box-sh
 .usage-meter .track { height: 5px; background: var(--border); border-radius: 99px; margin: 6px 0 10px; overflow: hidden; }
 .usage-meter .fill { height: 100%; background: var(--saffron); border-radius: 99px; }
 .usage-meter .val { float: right; font-weight: 600; color: var(--text); }
+
+/* --- candidate status ------------------------------------------------------ */
+
+.status-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.status-picker-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+.status-picker-select {
+  min-width: 11rem;
+  max-width: 100%;
+}
+
+.status-picker-error {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--danger);
+}

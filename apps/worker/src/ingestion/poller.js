@@ -7,6 +7,53 @@ import { matchJobFromMessage } from './jobRouter.js';
 
 const TEN_MINUTES_MS = 10 * 60 * 1000;
 
+// Backoff for a mailbox that will not connect.
+//
+// A failing connection used to be retried on the fixed interval forever, and
+// three of them against one host is a login attempt every few minutes, all day.
+// Shared mail hosts read that as a brute-force attempt and firewall the source
+// IP - which is exactly what happened to the production server, and the retries
+// are also what would re-ban it the moment the host unblocked us.
+//
+// Held in memory rather than on the row: this needs no migration, and a worker
+// restart resetting the backoff is acceptable because a restart is rare and
+// deliberate. The cap matters more than the curve - after ROLL_OFF consecutive
+// failures the mailbox is left alone entirely until someone fixes it and the
+// settings panel re-tests the connection.
+const BACKOFF_BASE_MS = 5 * 60 * 1000;
+const BACKOFF_CAP_MS = 6 * 60 * 60 * 1000;
+const ROLL_OFF_AFTER = 12;
+
+const failures = new Map();
+
+function backoffFor(attempts) {
+  return Math.min(BACKOFF_BASE_MS * 2 ** (attempts - 1), BACKOFF_CAP_MS);
+}
+
+/** True while a previously failing mailbox is still inside its backoff window. */
+function inBackoff(connectionId, now = Date.now()) {
+  const record = failures.get(connectionId);
+  if (!record) return false;
+  if (record.attempts >= ROLL_OFF_AFTER) return true;
+  return now < record.nextAttemptAt;
+}
+
+function recordFailure(connectionId, now = Date.now()) {
+  const attempts = (failures.get(connectionId)?.attempts ?? 0) + 1;
+  const record = { attempts, nextAttemptAt: now + backoffFor(attempts) };
+  failures.set(connectionId, record);
+  return record;
+}
+
+/** A mailbox that answers again starts from a clean slate. */
+function recordSuccess(connectionId) {
+  failures.delete(connectionId);
+}
+
+export function __resetBackoff() {
+  failures.clear();
+}
+
 /**
  * Providers this worker can actually fetch from. `forward_alias` mail arrives
  * by webhook rather than being pulled, and gmail/outlook still need their OAuth
@@ -177,12 +224,31 @@ export async function pollAllConnections(logger = console) {
     'Polling email connections'
   );
 
+  const attempted = [];
+
   for (const connection of pullable) {
+    if (inBackoff(connection.id)) continue;
+    attempted.push(connection);
+
     try {
       const result = await pollConnection(connection, logger);
+      recordSuccess(connection.id);
       logger.info?.({ connectionId: connection.id, address: connection.address, ...result }, 'Mailbox polled');
     } catch (err) {
-      logger.error?.({ connectionId: connection.id, err: err.message }, 'Poll failed');
+      const { attempts, nextAttemptAt } = recordFailure(connection.id);
+      const rolledOff = attempts >= ROLL_OFF_AFTER;
+
+      logger.error?.({
+        connectionId: connection.id,
+        err: err.message,
+        attempts,
+        ...(rolledOff
+          ? { rolledOff: true }
+          : { retryInMs: nextAttemptAt - Date.now() }),
+      }, rolledOff
+        ? 'Poll failed; giving up on this mailbox until it is reconnected'
+        : 'Poll failed');
+
       await prisma.emailConnection.update({
         where: { id: connection.id },
         data: { status: 'error', errorDetail: err.message.slice(0, 500) },
@@ -190,7 +256,7 @@ export async function pollAllConnections(logger = console) {
     }
   }
 
-  return pullable;
+  return attempted;
 }
 
 /**

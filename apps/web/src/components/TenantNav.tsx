@@ -33,6 +33,8 @@ export function TenantNav({ tenant }: TenantNavProps) {
         // Company first: it is the workspace's own identity, and the section
         // most people look for when they arrive here.
         { href: `/${tenant}/settings/company`, label: "Company profile" },
+        // Replaces "Plan & usage": one section, with the meter leading it.
+        { href: `/${tenant}/settings/subscription`, label: "Subscription" },
         { href: `/${tenant}/settings/profile`, label: "My profile" },
         { href: `/${tenant}/settings/email`, label: "Email" },
         { href: `/${tenant}/settings/team`, label: "Team" },

@@ -56,6 +56,10 @@ export enum Action {
   billingManage = 'billing:manage',
   settingsRead = 'settings:read',
   settingsUpdate = 'settings:update',
+  /// Reading the meter, the plan and invoice history. billingManage above is
+  /// the owner-only half: changing a plan, a payment method or cancelling
+  /// commits the company to money, and an admin is not the account holder.
+  billingRead = 'billing:read',
 }
 
 const PERMISSIONS: Record<Action, UserRole> = {
@@ -97,6 +101,7 @@ const PERMISSIONS: Record<Action, UserRole> = {
   [Action.billingManage]: UserRole.owner,
   [Action.settingsRead]: UserRole.viewer,
   [Action.settingsUpdate]: UserRole.admin,
+  [Action.billingRead]: UserRole.admin,
 };
 
 export function can(role: UserRole, action: Action): boolean {

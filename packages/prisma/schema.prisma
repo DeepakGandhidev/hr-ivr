@@ -121,6 +121,180 @@ model TenantAsset {
   @@map("tenant_assets")
 }
 
+enum SubscriptionStatus {
+  trialing
+  active
+  past_due
+  /// Cancelled but still inside the paid period.
+  cancelling
+  /// Period over: read-only, pending deletion.
+  expired
+}
+
+enum MandateStatus {
+  none
+  pending
+  active
+  failed
+  revoked
+}
+
+enum InvoiceStatus {
+  draft
+  issued
+  paid
+  void
+}
+
+/// What a tenant is paying for, and where they are in the cycle.
+///
+/// Separate from Tenant.planId, which stays as the fast path everything else
+/// already reads. This row carries the billing state that planId cannot express:
+/// when the period ends, whether a cancellation is pending, and why.
+model Subscription {
+  id                 String             @id @default(cuid())
+  tenantId           String             @unique @map("tenant_id")
+  planId             String             @map("plan_id")
+  status             SubscriptionStatus @default(trialing)
+
+  /// The billing cycle. "Days left" on the subscriptions page is the single
+  /// most important number on it, and it comes from here.
+  periodStart        DateTime           @map("period_start")
+  periodEnd          DateTime           @map("period_end")
+
+  /// Minutes bought on top of the plan, for this period. Spent after the plan
+  /// allowance, so a top-up cannot silently expire while plan minutes remain.
+  topUpMinutes       Int                @default(0) @map("top_up_minutes")
+
+  /// Set when cancellation is requested, not when it takes effect - the
+  /// customer keeps what they paid for until periodEnd.
+  cancelRequestedAt  DateTime?          @map("cancel_requested_at")
+  cancelReason       String?            @map("cancel_reason")
+  cancelComment      String?            @map("cancel_comment")
+
+  /// Finance's address, deliberately not a portal login: an invoice should
+  /// reach the person who pays without giving them the hiring data.
+  billingContactEmail String?           @map("billing_contact_email")
+  /// Which billing emails that contact receives, as { key: boolean }.
+  billingContactPrefs Json?             @map("billing_contact_prefs")
+
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  paymentMethods     PaymentMethod[]
+  invoices           Invoice[]
+  couponRedemptions  CouponRedemption[]
+
+  @@map("subscriptions")
+}
+
+/// A stored payment instrument.
+///
+/// No card data of our own: `providerRef` is the gateway's token and the brand
+/// and last four are display only. Nothing here is enough to charge anybody,
+/// which is the point - the moment this table could, it would need PCI scope.
+model PaymentMethod {
+  id             String        @id @default(cuid())
+  subscriptionId String        @map("subscription_id")
+  /// Which gateway issued the token, so a provider switch is detectable rather
+  /// than a silent mismatch.
+  provider       String
+  providerRef    String        @map("provider_ref")
+  brand          String?
+  last4          String?
+  mandateStatus  MandateStatus @default(none) @map("mandate_status")
+  isDefault      Boolean       @default(false) @map("is_default")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  subscription   Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, isDefault])
+  @@map("payment_methods")
+}
+
+/// One issued invoice.
+///
+/// Seller and buyer details are SNAPSHOTTED rather than joined. An invoice is a
+/// legal record of what was true when it was issued: if the customer later
+/// corrects their GSTIN or we move to a different selling entity, last
+/// quarter's invoice must not silently change to match.
+model Invoice {
+  id             String        @id @default(cuid())
+  subscriptionId String        @map("subscription_id")
+  /// Human-readable, gapless per financial year, e.g. PMT/2026-27/0007.
+  number         String        @unique
+  status         InvoiceStatus @default(issued)
+
+  periodStart    DateTime      @map("period_start")
+  periodEnd      DateTime      @map("period_end")
+  issuedAt       DateTime      @default(now()) @map("issued_at")
+  paidAt         DateTime?     @map("paid_at")
+
+  /// Line items: description, hsnSac, quantity, unitPaise, amountPaise.
+  lines          Json
+
+  /// Money in paise. Integers, because floating point on money produces
+  /// invoices that are off by a rupee and a CA who stops trusting them.
+  subtotalPaise  Int           @map("subtotal_paise")
+  discountPaise  Int           @default(0) @map("discount_paise")
+  cgstPaise      Int           @default(0) @map("cgst_paise")
+  sgstPaise      Int           @default(0) @map("sgst_paise")
+  igstPaise      Int           @default(0) @map("igst_paise")
+  totalPaise     Int           @map("total_paise")
+
+  /// The customer's state at issue time. Decides the tax split, so it is
+  /// recorded rather than recomputed.
+  placeOfSupply  String        @map("place_of_supply")
+  seller         Json
+  buyer          Json
+
+  subscription   Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, issuedAt])
+  @@map("invoices")
+}
+
+enum CouponKind {
+  percent
+  amount
+  minutes
+}
+
+/// A redeemable code. Platform-wide, not tenant-scoped - hence no tenantId and
+/// no RLS policy; redemptions are what belong to a tenant.
+model Coupon {
+  id           String     @id @default(cuid())
+  code         String     @unique
+  kind         CouponKind
+  /// Percent (1-100), paise, or minutes, according to `kind`.
+  value        Int
+  /// Null means unlimited.
+  maxRedemptions Int?     @map("max_redemptions")
+  redeemedCount  Int      @default(0) @map("redeemed_count")
+  expiresAt    DateTime?  @map("expires_at")
+  active       Boolean    @default(true)
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  redemptions  CouponRedemption[]
+
+  @@map("coupons")
+}
+
+model CouponRedemption {
+  id             String       @id @default(cuid())
+  couponId       String       @map("coupon_id")
+  subscriptionId String       @map("subscription_id")
+  redeemedAt     DateTime     @default(now()) @map("redeemed_at")
+
+  coupon         Coupon       @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  /// One tenant cannot redeem the same code twice.
+  @@unique([couponId, subscriptionId])
+  @@map("coupon_redemptions")
+}
+
 model Tenant {
   id            String       @id @default(cuid())
   name          String
@@ -132,6 +306,7 @@ model Tenant {
 
   companyProfile CompanyProfile?
   assets        TenantAsset[]
+  subscription  Subscription?
 
   plan          Plan         @relation(fields: [planId], references: [id])
   users         User[]

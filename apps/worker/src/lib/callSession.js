@@ -644,10 +644,25 @@ export function isBillableInterview({ status, recognised, producesReport, tenant
 
 export function deriveCallStatus(session) {
   if (session.outcome === TERMINAL.COMPLETED) return 'completed';
-  if (session.outcome === TERMINAL.ABANDONED) return 'dropped';
   if (session.outcome === TERMINAL.UNKNOWN_CALLER) return 'unknown_caller';
   if (session.outcome === TERMINAL.OUT_OF_WINDOW) return 'out_of_window';
   if (session.outcome === TERMINAL.DECLINED_CONSENT) return 'declined_consent';
   if (session.outcome === TERMINAL.ALREADY_INTERVIEWED) return 'completed';
+
+  // A caller who hangs up on the goodbye has still been interviewed.
+  //
+  // `finish()` defaults the outcome to ABANDONED whenever it is reached without
+  // one, which is what a caller-side hangup does - so a completed ten-question
+  // interview and a drop at question two arrived here indistinguishable, and
+  // both were recorded as `dropped`: unbilled, and shown to the recruiter as a
+  // failed call. Production did this to every interview but one.
+  //
+  // `screeningFinished` is the discriminator, because finish_screening is the
+  // only way into CANDIDATE_QA. State cannot serve here: finish() sets CLOSE on
+  // every ending, so it is CLOSE for the drop at question two as well.
+  if (session.outcome === TERMINAL.ABANDONED && session.screeningFinished && session.questionsAsked > 0) {
+    return 'completed';
+  }
+
   return 'dropped';
 }

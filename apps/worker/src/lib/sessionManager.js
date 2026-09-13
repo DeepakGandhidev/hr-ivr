@@ -37,6 +37,11 @@ export class SessionManager {
       timeConsent: null,           // null | 'now' | 'later' | 'withdrew'
       criteriaCovered: [],
       criteriaNotCovered: [],
+      // Set only by finish_screening, which is the sole way into CANDIDATE_QA.
+      // This is the evidence that the questions were actually covered, and it
+      // is deliberately not inferred from `state`: finish() sets CLOSE on every
+      // ending, including a drop at question two.
+      screeningFinished: false,
       escalation: null,
       outcome: null,
       codeAttempts: 0,

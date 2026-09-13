@@ -55,4 +55,35 @@ describe('deriveCallStatus', () => {
   it('falls back to dropped for an unrecognised outcome', () => {
     expect(deriveCallStatus({ outcome: 'something_new' })).toBe('dropped');
   });
+
+  // Production recorded every interview but one as `dropped`: the model says
+  // goodbye without calling end_call, nothing hangs up, and the caller-side
+  // hangup reaches finish() with no outcome - which defaults to ABANDONED.
+  // Ten-question interviews were going unbilled and were shown to the recruiter
+  // as failed calls.
+  it('counts an abandon after finish_screening as a completed interview', () => {
+    expect(deriveCallStatus({
+      outcome: TERMINAL.ABANDONED,
+      screeningFinished: true,
+      questionsAsked: 10,
+    })).toBe('completed');
+  });
+
+  it('still drops an abandon before the screening finished', () => {
+    expect(deriveCallStatus({
+      outcome: TERMINAL.ABANDONED,
+      screeningFinished: false,
+      questionsAsked: 2,
+    })).toBe('dropped');
+  });
+
+  // finish_screening set the flag but no question was ever put - there is no
+  // interview to bill for, whatever the tool reported.
+  it('drops an abandon that asked nothing', () => {
+    expect(deriveCallStatus({
+      outcome: TERMINAL.ABANDONED,
+      screeningFinished: true,
+      questionsAsked: 0,
+    })).toBe('dropped');
+  });
 });

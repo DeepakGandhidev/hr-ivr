@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import Transcript, { type TranscriptTurn } from "@/components/Transcript";
 
 interface Call {
   id: string;
@@ -12,6 +13,7 @@ interface Call {
   recognised: boolean;
   transcriptRef: string | null;
   recordingRef: string | null;
+  hasTranscript: boolean;
   candidate: {
     id: string;
     name: string | null;
@@ -67,6 +69,32 @@ export default function CallsPage({ params }: { params: { tenant: string } }) {
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [viewing, setViewing] = useState<Call | null>(null);
+  const [turns, setTurns] = useState<TranscriptTurn[] | null>(null);
+  const [turnsError, setTurnsError] = useState<string | null>(null);
+
+  /**
+   * Fetch one transcript on demand.
+   *
+   * Not carried in the list payload: that can be 500 calls, and a transcript is
+   * the whole conversation.
+   */
+  async function openTranscript(call: Call) {
+    setViewing(call);
+    setTurns(null);
+    setTurnsError(null);
+    try {
+      const res = await fetch(`/api/${tenant}/calls/${call.id}/transcript`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setTurnsError(body.message || "Could not load this transcript");
+        return;
+      }
+      setTurns(body.turns ?? []);
+    } catch {
+      setTurnsError("Could not reach the server");
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -196,9 +224,16 @@ export default function CallsPage({ params }: { params: { tenant: string } }) {
                         : <span className="subtle">—</span>}
                     </td>
                     <td>
-                      {c.transcriptRef
-                        ? <a href={c.transcriptRef}>Open</a>
-                        : <span className="subtle">In ProMonkey OS</span>}
+                      {/* This used to link to `transcriptRef`, which nothing
+                          has ever written — so every row offered "In ProMonkey
+                          OS" and clicking led nowhere. */}
+                      {c.hasTranscript ? (
+                        <button className="sm ghost" onClick={() => openTranscript(c)}>
+                          View
+                        </button>
+                      ) : (
+                        <span className="subtle">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -212,6 +247,46 @@ export default function CallsPage({ params }: { params: { tenant: string } }) {
           </p>
         )}
       </div>
+
+      {viewing && (
+        <div className="modal-backdrop" onClick={() => setViewing(null)} role="presentation">
+          <div
+            className="modal modal-wide"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Transcript for ${viewing.candidate.name ?? "candidate"}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="row" style={{ marginBottom: 10 }}>
+              <div>
+                <strong>{viewing.candidate.name ?? viewing.candidate.email ?? "Candidate"}</strong>
+                <div className="subtle">
+                  {viewing.candidate.job.title} ·{" "}
+                  {new Date(viewing.startedAt).toLocaleString()}
+                </div>
+              </div>
+              <button
+                className="ghost sm"
+                style={{ marginLeft: "auto" }}
+                onClick={() => setViewing(null)}
+              >
+                Close
+              </button>
+            </div>
+
+            {/* Recordings are not fetchable: the worker deliberately holds no
+                Plivo REST credential, which is what makes the no-outbound-
+                calling guarantee mechanical. Stating that beats a dead player. */}
+            {turnsError ? (
+              <div className="notice notice-error">{turnsError}</div>
+            ) : turns === null ? (
+              <p className="muted">Loading…</p>
+            ) : (
+              <Transcript turns={turns} />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

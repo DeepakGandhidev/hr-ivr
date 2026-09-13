@@ -68,3 +68,14 @@ export async function withTenant(tenantId, cb) {
 }
 
 export { PrismaClient };
+
+/**
+ * The Prisma namespace, for callers needing its sentinels and enums at runtime
+ * (`Prisma.DbNull`, `Prisma.JsonNull`).
+ *
+ * The type declaration next door has always re-exported everything from the
+ * generated client, so `import { Prisma }` type-checked here while resolving to
+ * undefined at runtime - a mismatch that fails only when the value is actually
+ * used, which for a sentinel means a silently wrong query rather than an error.
+ */
+export { Prisma } from './generated/client/index.js';

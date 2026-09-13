@@ -503,10 +503,17 @@ export class CallSession {
       const llmCostUsd = estimateLlmCostUsd(session.llmInputTokens, session.llmOutputTokens);
       const status = deriveCallStatus(session);
 
+      // The conversation is saved with the call, so the portal can show it.
+      // Until now nothing persisted it at all: it existed only in this
+      // process's memory and in stdout, so every finished interview left the
+      // recruiter with a score and no way to read what was said.
+      const turns = session.transcript?.turns?.() ?? [];
+
       await updateInterviewCall(session.interviewCallId, {
         endedAt: new Date(),
         language: session.language ?? null,
         status,
+        ...(turns.length ? { transcript: turns } : {}),
         telephonyCost: 0,
         llmCostUsd,
         ttsCostUsd: session.ttsCostUsd ?? 0,

@@ -255,6 +255,7 @@ export async function updateInterviewCall(id, payload) {
       ...(payload.status !== undefined && { status: payload.status }),
       ...(payload.recordingRef !== undefined && { recordingRef: payload.recordingRef }),
       ...(payload.transcriptRef !== undefined && { transcriptRef: payload.transcriptRef }),
+      ...(payload.transcript !== undefined && { transcript: payload.transcript }),
       ...(payload.telephonyCost !== undefined && { telephonyCost: payload.telephonyCost }),
       ...(payload.llmCostUsd !== undefined && { llmCostUsd: payload.llmCostUsd }),
       ...(payload.ttsCostUsd !== undefined && { ttsCostUsd: payload.ttsCostUsd }),

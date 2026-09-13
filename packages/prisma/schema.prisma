@@ -602,6 +602,16 @@ model InterviewCall {
   status          InterviewCallStatus?
   recordingRef    String?               @map("recording_ref")
   transcriptRef   String?               @map("transcript_ref")
+
+  /// The conversation itself: an ordered array of
+  /// `{ speaker: 'pratibha' | 'candidate', text, atMs }`.
+  ///
+  /// Held here rather than behind `transcriptRef` because nothing ever wrote
+  /// that ref - it points at a durable copy in ProMonkey OS the worker has no
+  /// code to send, so every call in production had a null transcript and the
+  /// portal had nothing to show. On the call row it inherits the tenant
+  /// isolation and the delete cascade the candidate's record already has.
+  transcript      Json?
   telephonyCost   Float?                @map("telephony_cost")
   llmCostUsd      Float?                @map("llm_cost_usd")
   ttsCostUsd      Float?                @map("tts_cost_usd")

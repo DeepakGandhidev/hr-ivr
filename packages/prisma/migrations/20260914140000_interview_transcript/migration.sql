@@ -1,0 +1,15 @@
+-- AlterTable
+--
+-- The conversation, stored with the call.
+--
+-- `transcript_ref` has existed since the first migration and was never written:
+-- it pointed at a durable copy in ProMonkey OS that the worker has no code to
+-- send, so every interview_calls row in production carries a null there and the
+-- portal has never had a transcript to display. Keeping the text on the call row
+-- gives it the tenant isolation and the delete cascade the rest of the
+-- candidate's record already has.
+--
+-- `transcript_ref` is left in place: it is the right column for an external
+-- durable copy if one is ever actually written, and dropping it would discard
+-- that intent for no gain.
+ALTER TABLE "interview_calls" ADD COLUMN "transcript" JSONB;

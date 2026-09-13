@@ -754,3 +754,69 @@ a.stat:hover { border-color: var(--border-strong); text-decoration: none; box-sh
 .md-preview ol { margin: 0 0 0.75em; padding-left: 1.35rem; }
 .md-preview li { margin-bottom: 0.2em; }
 .md-preview > :first-child { margin-top: 0; }
+
+/* --- transcript ------------------------------------------------------------- */
+
+.transcript {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.transcript-turn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 11px;
+  background: var(--surface);
+  max-width: 46rem;
+}
+
+/* Pratibha sits left and the candidate indents, so a long conversation is
+   skimmable by shape before a word is read. Never colour alone: the speaker is
+   always named. */
+.transcript-candidate {
+  background: var(--surface-2);
+  margin-left: auto;
+  border-color: var(--border-strong);
+}
+
+.transcript-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.transcript-speaker {
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.transcript-at {
+  font-size: 0.75rem;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.transcript-text {
+  margin: 0;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 560px) {
+  .transcript-candidate { margin-left: 0; }
+}
+
+/* A transcript needs more width than a confirmation dialog. */
+.modal-wide {
+  max-width: min(52rem, 92vw);
+  max-height: 82vh;
+  overflow-y: auto;
+}

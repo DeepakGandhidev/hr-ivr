@@ -40,13 +40,14 @@ CREATE TABLE "company_profiles" (
 CREATE UNIQUE INDEX "company_profiles_tenant_id_key" ON "company_profiles"("tenant_id");
 
 -- AlterTable: personal profile fields.
+--
+-- No two-factor columns: GoTrue owns MFA (auth.mfa_factors) and is what
+-- actually gates a login. A second secret here could only be checked by our own
+-- screens, which an attacker holding the password would not visit.
 ALTER TABLE "users"
   ADD COLUMN "photo_asset_id" TEXT,
   ADD COLUMN "timezone" TEXT,
-  ADD COLUMN "notification_prefs" JSONB,
-  ADD COLUMN "two_factor_secret" TEXT,
-  ADD COLUMN "two_factor_enabled_at" TIMESTAMP(3),
-  ADD COLUMN "two_factor_recovery" TEXT[] DEFAULT ARRAY[]::TEXT[];
+  ADD COLUMN "notification_prefs" JSONB;
 
 -- AddForeignKey
 ALTER TABLE "tenant_assets" ADD CONSTRAINT "tenant_assets_tenant_id_fkey"

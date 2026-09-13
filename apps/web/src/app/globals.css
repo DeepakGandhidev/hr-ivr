@@ -972,3 +972,32 @@ a.stat:hover { border-color: var(--border-strong); text-decoration: none; box-sh
   max-height: 100%;
   object-fit: contain;
 }
+
+/* --- personal profile ------------------------------------------------------- */
+
+.avatar-preview {
+  width: 88px;
+  height: 88px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+  font-size: 2rem;
+  font-weight: 600;
+}
+
+.avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
+
+.pref-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.pref-row input { width: auto; margin-top: 3px; flex: none; }

@@ -177,12 +177,11 @@ model User {
   /// silently off for everyone who has ever saved preferences.
   notificationPrefs Json?  @map("notification_prefs")
 
-  /// Set when TOTP is confirmed, not when it is started - an unconfirmed
-  /// secret must never gate a login, or a failed setup locks the account out.
-  twoFactorSecret   String?   @map("two_factor_secret")
-  twoFactorEnabledAt DateTime? @map("two_factor_enabled_at")
-  /// Single-use recovery codes, stored hashed.
-  twoFactorRecovery String[]  @map("two_factor_recovery")
+  /// Two-factor authentication is deliberately NOT stored here. GoTrue owns it
+  /// (auth.mfa_factors) and is the thing that actually gates a login; a second
+  /// secret in this table could only be checked by our own screens, which an
+  /// attacker with the password would simply not visit. Enrolment status is
+  /// read from GoTrue rather than mirrored, so the two cannot disagree.
 
   tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   photo           TenantAsset? @relation("UserPhoto", fields: [photoAssetId], references: [id], onDelete: SetNull)

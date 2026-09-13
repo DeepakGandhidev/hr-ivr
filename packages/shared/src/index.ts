@@ -7,3 +7,4 @@ export * from './audit.js';
 export * from './candidateStatus.js';
 export * from './interviewMinutes.js';
 export * from './gst.js';
+export * from './notifications.js';

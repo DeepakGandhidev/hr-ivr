@@ -18,12 +18,15 @@
     "@pratibha/worker": "^2.0.0",
     "@supabase/ssr": "^0.5.1",
     "@supabase/supabase-js": "^2.45.3",
+    "@tailwindcss/postcss": "^4.3.3",
     "imapflow": "^1.7.8",
     "next": "14.2.35",
     "nodemailer": "^9.1.1",
+    "postcss": "^8.5.28",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "resend": "^4.0.0",
+    "tailwindcss": "^4.3.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {

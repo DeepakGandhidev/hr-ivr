@@ -1,3 +1,7 @@
+@import "tailwindcss";
+
+@layer base {
+
 /* ---------------------------------------------------------------------------
    Pratibha design system
 
@@ -5,13 +9,23 @@
    matter more than usual here: this app has ~18 screens built from bare
    <input>, <button> and <table>, so styling the elements themselves lifts every
    screen at once instead of requiring each to be rewritten.
+
+   Everything in this file lives inside @layer base (see the closing brace at
+   the bottom). Tailwind v4 compiles its own CSS into cascade layers, and
+   unlayered CSS always beats layered CSS regardless of specificity — so
+   without this wrapper, no Tailwind utility class could ever override
+   anything styled here. Being in `base` (rather than left unlayered, or
+   pushed into `components`/`utilities`) means: Tailwind's own preflight
+   resets still lose to these rules (same layer, this file loads after
+   Tailwind's internal base), while new Tailwind utility classes on new
+   components can still win when you want them to.
    --------------------------------------------------------------------------- */
 
 :root {
   color-scheme: light;
 
   /* Neutrals — warm grey, so the UI does not read as cold blue-grey. */
-  --bg: #f7f7f8;
+  --bg: #FAF9F6;
   --surface: #ffffff;
   --surface-2: #fbfbfc;
   --border: #e4e4e7;
@@ -305,12 +319,18 @@ tbody tr:hover { background: var(--surface-2); }
 
 .shell { display: flex; min-height: 100vh; }
 
+/* Sidebar — fixed brand-indigo panel, the same in both light and dark mode.
+   The Light/Auto/Dark toggle still fully controls data-theme for the rest of
+   the app (see ThemeToggle + the tokens above); it just doesn't restyle this
+   panel, because the reference design keeps the sidebar one constant color
+   regardless of theme — the same treatment already used for .dash. */
 .sidebar {
-  width: 224px;
+  width: 240px;
   flex-shrink: 0;
-  background: var(--surface);
-  border-right: 1px solid var(--border);
-  padding: 18px 14px;
+  background: var(--indigo);
+  color: #fff;
+  border-right: none;
+  padding: 20px 16px 16px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -322,38 +342,73 @@ tbody tr:hover { background: var(--surface-2); }
   gap: 9px;
   font-weight: 650;
   font-size: 15px;
-  color: var(--text);
-  padding: 4px 8px 14px;
+  color: #fff;
+  padding: 2px 8px 14px;
 }
 .brand:hover { text-decoration: none; }
 .brand-mark {
   width: 26px; height: 26px;
   display: grid; place-items: center;
-  border-radius: 7px;
-  background: var(--accent);
-  color: #fff;
+  border-radius: 9px;
+  background: var(--saffron);
+  color: var(--indigo);
   font-size: 13px;
   font-weight: 700;
+}
+.brand-word { position: relative; padding-bottom: 6px; }
+.brand-word::after {
+  content: "";
+  position: absolute;
+  left: 0; bottom: 0;
+  width: 34px; height: 2.5px;
+  border-radius: 99px;
+  background: var(--saffron);
 }
 
 .nav-section {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-subtle);
+  color: rgb(255 255 255 / 0.42);
   padding: 14px 8px 5px;
   font-weight: 600;
 }
 
 .nav-link {
-  display: block;
-  padding: 7px 9px;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px 7px 10.5px;
+  border-left: 2.5px solid transparent;
+  margin-left: -2.5px;
+  border-radius: 8px;
+  color: rgb(255 255 255 / 0.72);
   font-weight: 500;
 }
-.nav-link:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
-.nav-link[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.nav-link:hover { background: rgb(255 255 255 / 0.06); color: #fff; text-decoration: none; }
+.nav-link[aria-current="page"] {
+  background: rgb(255 255 255 / 0.1);
+  border-left-color: var(--saffron);
+  color: #fff;
+  font-weight: 600;
+}
+
+.nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--saffron);
+  color: var(--indigo);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  flex: none;
+}
 
 .content { flex: 1; padding: 28px 32px; min-width: 0; }
 .page-head { margin-bottom: 22px; }
@@ -490,8 +545,22 @@ a.stat:hover { border-color: var(--border-strong); text-decoration: none; box-sh
   box-shadow: var(--shadow-sm);
 }
 
-/* Sidebar mount: pushed to the bottom so it never sits between nav groups. */
-.sidebar .theme-toggle { margin-top: auto; }
+/* Sidebar mount: pushed down under the quota meters / Ask Saarthi card. */
+.sidebar .theme-toggle { margin-top: 12px; }
+
+/* On the dark indigo panel the toggle needs its own (lighter-on-dark)
+   coloring rather than the default light-surface one above. */
+.sidebar .theme-toggle {
+  background: rgb(255 255 255 / 0.06);
+  border-color: rgb(255 255 255 / 0.1);
+}
+.sidebar .theme-toggle button { color: rgb(255 255 255 / 0.6); }
+.sidebar .theme-toggle button:hover:not(:disabled) { color: #fff; }
+.sidebar .theme-toggle button[aria-pressed="true"] {
+  background: rgb(255 255 255 / 0.14);
+  color: #fff;
+  box-shadow: none;
+}
 
 /* Auth and marketing screens have no sidebar, so the toggle floats instead. */
 .theme-toggle-floating {
@@ -503,8 +572,47 @@ a.stat:hover { border-color: var(--border-strong); text-decoration: none; box-sh
   background: var(--surface);
 }
 
+/* --- Ask Saarthi card (sidebar) -------------------------------------------- */
+
+/* Scoped as `.sidebar .ask-saarthi` (not just `.ask-saarthi`) on purpose:
+   the base button rule is `button, .btn {...}` and its hover state is
+   `button:hover:not(:disabled)`. That hover selector carries a type
+   selector plus two pseudo-classes, which is MORE specific than a bare
+   `.ask-saarthi:hover` (one class + one pseudo-class) — so without the
+   `.sidebar` ancestor, the generic light-surface hover background was
+   winning over this card's own dark hover state. */
+.sidebar .ask-saarthi {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px 13px;
+  border-radius: var(--radius);
+  background: rgb(255 255 255 / 0.06);
+  border: 1px solid rgb(255 255 255 / 0.1);
+  color: #fff;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  width: 100%;
+}
+.sidebar .ask-saarthi:hover,
+.sidebar .ask-saarthi:focus-visible {
+  background: rgb(255 255 255 / 0.09);
+  outline: none;
+}
+.sidebar .ask-saarthi .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--saffron);
+  margin-top: 5px;
+  flex: none;
+}
+.sidebar .ask-saarthi b { display: block; font-size: 13.5px; font-weight: 650; }
+.sidebar .ask-saarthi span { display: block; font-size: 12px; color: rgb(255 255 255 / 0.6); margin-top: 1px; }
+
 @media (max-width: 720px) {
-  .sidebar .theme-toggle { margin-top: 0; width: 100%; }
+  .sidebar .theme-toggle { margin-top: 10px; width: 100%; }
 }
 
 @media (max-width: 720px) {
@@ -676,8 +784,10 @@ a.stat:hover { border-color: var(--border-strong); text-decoration: none; box-sh
 :root[data-theme="dark"] .mail b { color: var(--ink); }
 .mail span { font-size: 12px; color: var(--brand-muted); }
 
-/* Sidebar quota meters */
-.usage-meter { margin-top: 12px; font-size: 12px; color: var(--text-muted); padding: 0 4px; }
-.usage-meter .track { height: 5px; background: var(--border); border-radius: 99px; margin: 6px 0 10px; overflow: hidden; }
+/* Sidebar quota meters — light on the dark indigo panel */
+.usage-meter { margin-top: 12px; font-size: 12px; color: rgb(255 255 255 / 0.65); padding: 0 4px; }
+.usage-meter .track { height: 5px; background: rgb(255 255 255 / 0.14); border-radius: 99px; margin: 6px 0 10px; overflow: hidden; }
 .usage-meter .fill { height: 100%; background: var(--saffron); border-radius: 99px; }
-.usage-meter .val { float: right; font-weight: 600; color: var(--text); }
+.usage-meter .val { float: right; font-weight: 600; color: #fff; }
+
+} /* end @layer base */

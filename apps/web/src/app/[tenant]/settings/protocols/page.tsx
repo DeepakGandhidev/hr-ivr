@@ -312,7 +312,7 @@ export default function ProtocolsPage({ params }: { params: { tenant: string } }
 
           <div className="mt-7">
             <label htmlFor="brand" className={labelCls}>
-              Hiring under (optional)
+              Hiring under
             </label>
             <input
               id="brand"
@@ -321,7 +321,13 @@ export default function ProtocolsPage({ params }: { params: { tenant: string } }
               placeholder={companyName || "your company"}
               className={inputCls}
             />
-            <p className={hintCls}>Set a different brand here if this role is hired under another name.</p>
+            <p className={hintCls}>
+              The name the agent says out loud when it introduces itself
+              {scope ? " on calls for this job" : " on every call"}. Leave blank
+              to use {companyName || "your workspace name"}. This is the spoken
+              name, not the legal entity — the name on invoices is set in
+              Company profile.
+            </p>
           </div>
 
           <div className="mt-7">
@@ -355,18 +361,6 @@ export default function ProtocolsPage({ params }: { params: { tenant: string } }
         </form>
 
         <div className="flex flex-col gap-6 xl:sticky xl:top-6 xl:self-start">
-          <div className={cardCls}>
-            <h3 className="mb-4 text-base font-semibold text-[var(--text)]">Company</h3>
-            <label htmlFor="company" className={labelCls}>
-              Company name
-            </label>
-            <input id="company" value={companyName} onChange={(e) => setCompanyName(e.target.value)} className={inputCls} />
-            <p className={hintCls}>The agent says this out loud when it introduces itself on every call.</p>
-            <button type="button" onClick={saveCompany} disabled={!companyName.trim()} className={`${secondaryBtn} mt-4 w-full`}>
-              Save company name
-            </button>
-          </div>
-
           <div className={cardCls}>
             <label htmlFor="scope" className={labelCls}>
               These settings apply to

@@ -193,31 +193,42 @@ function QuotaMeters({ tenant }: { tenant: string }) {
 
   return (
     <div className="mt-3.5 px-1 text-xs text-white/65">
-      {rows.map((r) => (
-        <div key={r.label} className="mb-2.5 last:mb-0">
-          {r.label}
+      {showMinutes && (
+        <div className="mb-2.5 last:mb-0">
+          Interview minutes
           <span className="float-right font-semibold text-white">
-            {r.used} / {r.limit}
+            {minutes.used} / {minutes.limit}
           </span>
           <div className="mt-1.5 h-[5px] overflow-hidden rounded-full bg-white/15">
             <div
-              className="h-full rounded-full bg-[var(--saffron)]"
-              style={{ width: `${Math.min(100, (r.used / r.limit!) * 100)}%` }}
+              className={`h-full rounded-full ${
+                minutes.level === "exhausted"
+                  ? "bg-[var(--danger)]"
+                  : minutes.level === "warning"
+                    ? "bg-[var(--warning)]"
+                    : "bg-[var(--saffron)]"
+              }`}
+              style={{ width: `${Math.min(100, (minutes.used / minutes.limit!) * 100)}%` }}
             />
           </div>
-          <div className="usage-note">
+
+          {/* Customers reason in interviews and are billed in minutes. Always
+              "roughly": it is an estimate, and saying so is what stops it being
+              quoted back at us. */}
+          <div className="mt-1 text-white/50">
             {minutes.remaining} left
             {minutes.approximateInterviewsRemaining !== null &&
               ` · roughly ${minutes.approximateInterviewsRemaining} ${
                 minutes.approximateInterviewsRemaining === 1 ? "interview" : "interviews"
               }`}
           </div>
+
           {minutes.level === "exhausted" ? (
-            <div className="usage-warning exhausted">
+            <div className="mt-1.5 rounded bg-[var(--danger-soft)] px-1.5 py-1 text-[var(--danger)]">
               Out of minutes. Further interviews bill as overage.
             </div>
           ) : minutes.level === "warning" ? (
-            <div className="usage-warning">
+            <div className="mt-1.5 rounded bg-[var(--warning-soft)] px-1.5 py-1 text-[var(--warning)]">
               {Math.round((minutes.used / minutes.limit!) * 100)}% of your minutes used.
             </div>
           ) : null}
@@ -225,14 +236,14 @@ function QuotaMeters({ tenant }: { tenant: string }) {
       )}
 
       {screeningLimit !== null && (
-        <div>
+        <div className="mb-2.5 last:mb-0">
           CV screenings
-          <span className="val">
+          <span className="float-right font-semibold text-white">
             {usage.meter.screeningsUsed} / {screeningLimit}
           </span>
-          <div className="track">
+          <div className="mt-1.5 h-[5px] overflow-hidden rounded-full bg-white/15">
             <div
-              className="fill"
+              className="h-full rounded-full bg-[var(--saffron)]"
               style={{
                 width: `${Math.min(100, (usage.meter.screeningsUsed / screeningLimit) * 100)}%`,
               }}

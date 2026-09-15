@@ -31,9 +31,11 @@ interface TestResult {
   folders?: string[];
   error?: string;
   hint?: string | null;
+  
 }
 
-// Shared Tailwind fragments so every field/card across this page (and the
+
+// Share Tailwind fragments so every field/card across this page (and the
 // nested ConnectionRow) stays visually identical.
 const labelCls = "mb-1.5 block text-sm font-semibold text-[var(--text)]";
 const hintCls = "mt-1.5 text-xs text-[var(--text-muted)]";

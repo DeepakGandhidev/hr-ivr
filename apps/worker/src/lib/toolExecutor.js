@@ -384,6 +384,7 @@ export class ToolExecutor {
   async #finishScreening({ criteria_covered = [], criteria_not_covered = [] }, session) {
     session.criteriaCovered = criteria_covered;
     session.criteriaNotCovered = criteria_not_covered;
+    session.screeningFinished = true;
     session.setState(STATES.CANDIDATE_QA);
     return { instruction: 'Tell them that is everything from your side and ask whether they have any questions about the role or the company.' };
   }

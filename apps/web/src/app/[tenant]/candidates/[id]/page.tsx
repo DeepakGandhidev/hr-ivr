@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import type { CandidateStatus } from "@pratibha/shared";
+import { CandidateStatusBadge, CandidateStatusPicker } from "@/components/CandidateStatus";
 
 /**
  * Everything about one candidate, on one screen.
@@ -64,6 +66,7 @@ interface Candidate {
   cvParsed: { rawPreview?: string; experience?: string; skills?: string[] } | null;
   parseFailed: boolean;
   createdAt: string;
+  status: CandidateStatus;
   job: { id: string; title: string };
   screenings: Screening[];
   notes: Note[];
@@ -87,15 +90,6 @@ function duration(start: string, end: string | null) {
 }
 
 /** The stage the candidate has actually reached, derived from the rows. */
-function stageOf(c: Candidate) {
-  if (c.interviewCalls.some((call) => call.assessmentReport)) return "Assessed";
-  if (c.interviewCalls.length) return "Interviewed";
-  if (c.shortlistItems.some((i) => i.shortlist.approvals.length)) return "Approved";
-  if (c.shortlistItems.length) return "Shortlisted";
-  if (c.screenings.length) return "Screened";
-  return "Applied";
-}
-
 export default function CandidatePage({ params }: { params: { tenant: string; id: string } }) {
   const { tenant, id } = params;
   const [candidate, setCandidate] = useState<Candidate | null>(null);
@@ -135,13 +129,25 @@ export default function CandidatePage({ params }: { params: { tenant: string; id
         <Link href={`/${tenant}/pipeline`} className="subtle">&larr; Pipeline</Link>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 6, flexWrap: "wrap" }}>
           <h1 style={{ margin: 0 }}>{candidate.name ?? candidate.email ?? "Unnamed candidate"}</h1>
-          <span className="pill gate">{stageOf(candidate)}</span>
+          {/* The stored status, not a stage derived from rows. A derivation
+              here would be the second state machine the pipeline is meant to
+              avoid, and it would disagree with the list the moment anyone set
+              a status by hand. */}
+          <CandidateStatusBadge status={candidate.status} />
           {latest && <span className={`score${latest.score >= 75 ? " hi" : ""}`}>{latest.score}</span>}
         </div>
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))" }}>
+          <div>
+            <CandidateStatusPicker
+              tenant={tenant}
+              candidateId={candidate.id}
+              status={candidate.status}
+              onChanged={load}
+            />
+          </div>
           <div>
             <div className="subtle">Applied for</div>
             <Link href={`/${tenant}/jobs/${candidate.job.id}`} style={{ fontWeight: 550 }}>

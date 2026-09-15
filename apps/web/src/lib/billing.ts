@@ -1,4 +1,10 @@
-import { PLANS, TRIAL_LIMITS, QuotaExceededError } from "@pratibha/shared";
+import {
+  PLANS,
+  TRIAL_LIMITS,
+  QuotaExceededError,
+  quotaState,
+  approximateInterviews,
+} from "@pratibha/shared";
 import type { Tenant } from "@pratibha/prisma";
 import type { TenantTransactionClient } from "@/lib/authz";
 
@@ -26,6 +32,10 @@ export function screeningLimit(tenant: Tenant): number | null {
   return plan.limits.screenings;
 }
 
+/**
+ * Retained only to describe a plan in the terms customers think in. Pricing is
+ * per minute — this is not a quota and nothing is enforced against it.
+ */
 export function interviewLimit(tenant: Tenant): number | null {
   if (tenant.status === "trial") {
     return TRIAL_LIMITS.interviews;
@@ -33,6 +43,41 @@ export function interviewLimit(tenant: Tenant): number | null {
   const plan = PLANS[tenant.planId as keyof typeof PLANS];
   if (!plan) return null;
   return plan.limits.interviews;
+}
+
+/** The quota that is actually enforced and billed. */
+export function interviewMinuteLimit(tenant: Tenant): number | null {
+  if (tenant.status === "trial") {
+    return TRIAL_LIMITS.interviewMinutes;
+  }
+  const plan = PLANS[tenant.planId as keyof typeof PLANS];
+  if (!plan) return null;
+  return plan.limits.interviewMinutes;
+}
+
+/**
+ * Where this tenant stands on minutes this period, ready for the meter and the
+ * warnings. One place, so the sidebar and the warnings cannot disagree about
+ * what "nearly out" means.
+ */
+export async function interviewMinuteQuota(
+  tenant: Tenant,
+  tx: TenantTransactionClient
+) {
+  const meter = await tx.usageMeter.findUnique({
+    where: { tenantId_period: { tenantId: tenant.id, period: currentUsagePeriod() } },
+  });
+
+  const used = meter?.interviewMinutesUsed ?? 0;
+  const state = quotaState(used, interviewMinuteLimit(tenant));
+
+  return {
+    ...state,
+    // Customers think in interviews and are billed in minutes, so both are
+    // reported — the interview figure always as an approximation.
+    approximateInterviewsRemaining:
+      state.remaining === null ? null : approximateInterviews(state.remaining),
+  };
 }
 
 export async function assertCanCreateJob(
@@ -114,22 +159,38 @@ export async function incrementScreeningUsage(
   return { ok: true, overage, meter: updated };
 }
 
+/**
+ * Record a billed call: minutes against the quota, plus the interview count.
+ *
+ * Minutes past the ceiling land in `overageMinutes` rather than inflating the
+ * used figure, so "412 of 650" never reads as more than the plan allows while
+ * still charging for what was actually consumed.
+ *
+ * The interview count is incremented either way — it describes what happened,
+ * not what was charged.
+ */
 export async function incrementInterviewUsage(
   tx: TenantTransactionClient,
   tenantId: string,
-  limit: number | null
+  limit: number | null,
+  minutes = 1
 ) {
   const period = currentUsagePeriod();
   const meter = await getOrCreateUsageMeter(tx, tenantId, period);
-  const remaining = limit !== null ? Math.max(0, limit - meter.interviewsUsed) : 1;
-  const overage = remaining === 0;
+  const billed = Math.max(0, Math.round(minutes));
+
+  const room = limit !== null ? Math.max(0, limit - meter.interviewMinutesUsed) : billed;
+  const withinQuota = Math.min(billed, room);
+  const overageMinutes = billed - withinQuota;
 
   const updated = await tx.usageMeter.update({
     where: { id: meter.id },
-    data: overage
-      ? { overageInterviews: { increment: 1 } }
-      : { interviewsUsed: { increment: 1 } },
+    data: {
+      interviewsUsed: { increment: 1 },
+      ...(withinQuota > 0 && { interviewMinutesUsed: { increment: withinQuota } }),
+      ...(overageMinutes > 0 && { overageMinutes: { increment: overageMinutes } }),
+    },
   });
 
-  return { ok: true, overage, meter: updated };
+  return { ok: true, overage: overageMinutes > 0, overageMinutes, meter: updated };
 }

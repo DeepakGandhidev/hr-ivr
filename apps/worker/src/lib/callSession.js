@@ -2,6 +2,7 @@ import { VoiceActivityDetector } from '../audio/vad.js';
 import { SarvamSTT } from '../audio/stt.js';
 import { createTTS } from '../audio/tts.js';
 import { STATES, TERMINAL, isVerified } from './states.js';
+import { billableMinutes, isBillableCall } from '@pratibha/shared';
 import { makeDisclosure } from './screening.js';
 import { toSpeech, splitSentences } from '../utils/speech.js';
 import { truncateToHeard } from './history.js';
@@ -503,10 +504,25 @@ export class CallSession {
       const llmCostUsd = estimateLlmCostUsd(session.llmInputTokens, session.llmOutputTokens);
       const status = deriveCallStatus(session);
 
+      // The conversation is saved with the call, so the portal can show it.
+      // Until now nothing persisted it at all: it existed only in this
+      // process's memory and in stdout, so every finished interview left the
+      // recruiter with a score and no way to read what was said.
+      const turns = session.transcript?.turns?.() ?? [];
+
+      // Pricing is per minute, charged from the first question to the end of
+      // the call. Computed once here and stored on the row so an invoice line
+      // can be reconciled against the call that produced it.
+      const endedAt = new Date();
+      const minutes = billableMinutes(session.firstQuestionAt, endedAt);
+
       await updateInterviewCall(session.interviewCallId, {
-        endedAt: new Date(),
+        endedAt,
         language: session.language ?? null,
         status,
+        firstQuestionAt: session.firstQuestionAt ?? null,
+        billableMinutes: minutes,
+        ...(turns.length ? { transcript: turns } : {}),
         telephonyCost: 0,
         llmCostUsd,
         ttsCostUsd: session.ttsCostUsd ?? 0,
@@ -519,15 +535,16 @@ export class CallSession {
       // questions or never yields a report, so `producesReport` covers them
       // all; `status` is checked too so a completed-but-reportless call cannot
       // slip through.
-      const billable = isBillableInterview({
+      const billable = isBillableCall({
         status,
         recognised: session.recognised,
         producesReport,
         tenantId: session.tenant?.id,
+        minutes,
       });
 
       if (billable) {
-        await incrementInterviewUsage(session.tenant.id).catch(err =>
+        await incrementInterviewUsage(session.tenant.id, minutes).catch(err =>
           this.logger.error({ err: err.message }, 'Interview usage increment failed'));
       } else {
         this.logger.info({
@@ -535,6 +552,7 @@ export class CallSession {
           status,
           recognised: session.recognised,
           questionsAsked: session.questionsAsked,
+          minutes,
         }, 'Call not billed');
       }
     }
@@ -629,25 +647,27 @@ function estimateLlmCostUsd(inputTokens, outputTokens) {
   return Number(((inputTokens || 0) * 0.00000025 + (outputTokens || 0) * 0.00000125).toFixed(6));
 }
 
-/**
- * 2.8: a billable "AI interview" is a completed inbound call with a recognised,
- * shortlisted candidate that produces an assessment report. Everything else —
- * unknown caller, out of window, consent declined, mid-call drop, and a repeat
- * call by someone already interviewed — is explicitly not billed.
- *
- * `producesReport` must be the same value used to decide whether the post-call
- * analyst runs, so a tenant is never charged for a call that yielded no report.
- */
-export function isBillableInterview({ status, recognised, producesReport, tenantId }) {
-  return Boolean(producesReport) && status === 'completed' && Boolean(recognised) && Boolean(tenantId);
-}
-
 export function deriveCallStatus(session) {
   if (session.outcome === TERMINAL.COMPLETED) return 'completed';
-  if (session.outcome === TERMINAL.ABANDONED) return 'dropped';
   if (session.outcome === TERMINAL.UNKNOWN_CALLER) return 'unknown_caller';
   if (session.outcome === TERMINAL.OUT_OF_WINDOW) return 'out_of_window';
   if (session.outcome === TERMINAL.DECLINED_CONSENT) return 'declined_consent';
   if (session.outcome === TERMINAL.ALREADY_INTERVIEWED) return 'completed';
+
+  // A caller who hangs up on the goodbye has still been interviewed.
+  //
+  // `finish()` defaults the outcome to ABANDONED whenever it is reached without
+  // one, which is what a caller-side hangup does - so a completed ten-question
+  // interview and a drop at question two arrived here indistinguishable, and
+  // both were recorded as `dropped`: unbilled, and shown to the recruiter as a
+  // failed call. Production did this to every interview but one.
+  //
+  // `screeningFinished` is the discriminator, because finish_screening is the
+  // only way into CANDIDATE_QA. State cannot serve here: finish() sets CLOSE on
+  // every ending, so it is CLOSE for the drop at question two as well.
+  if (session.outcome === TERMINAL.ABANDONED && session.screeningFinished && session.questionsAsked > 0) {
+    return 'completed';
+  }
+
   return 'dropped';
 }

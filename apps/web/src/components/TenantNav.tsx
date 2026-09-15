@@ -49,6 +49,12 @@ export function TenantNav({ tenant, badges }: TenantNavProps) {
     {
       label: "Settings",
       links: [
+        // Company first: it is the workspace's own identity, and the section
+        // most people look for when they arrive here.
+        { href: `/${tenant}/settings/company`, label: "Company profile" },
+        // Replaces "Plan & usage": one section, with the meter leading it.
+        { href: `/${tenant}/settings/subscription`, label: "Subscription" },
+        { href: `/${tenant}/settings/profile`, label: "My profile" },
         { href: `/${tenant}/settings/email`, label: "Email" },
         { href: `/${tenant}/settings/team`, label: "Team" },
         { href: `/${tenant}/settings/templates`, label: "Templates" },
@@ -139,16 +145,29 @@ function BrandMarkIcon() {
 }
 
 /**
- * Interviews and screenings used this month, against the plan's ceiling.
+ * Minutes used this month, against the plan's ceiling.
  *
- * Renders nothing at all until the numbers arrive, and nothing ever on an
- * unlimited plan: an empty progress bar that can never fill is noise in a
- * sidebar someone looks at all day.
+ * Minutes lead because minutes are what is billed. The interview figure beside
+ * them is an approximation and is labelled as one — customers think in
+ * interviews, and dropping the unit they reason in makes the meter unreadable,
+ * while presenting the estimate as exact invites the overage argument the meter
+ * exists to prevent.
+ *
+ * Renders nothing until the numbers arrive, and nothing ever on an unlimited
+ * plan: a progress bar that can never fill is noise in a sidebar someone looks
+ * at all day.
  */
 function QuotaMeters({ tenant }: { tenant: string }) {
   const [usage, setUsage] = useState<{
-    meter: { interviewsUsed: number; screeningsUsed: number };
-    limits: { interviews: number | null; screenings: number | null };
+    meter: { interviewMinutesUsed: number; screeningsUsed: number };
+    limits: { interviewMinutes: number | null; screenings: number | null };
+    minutes: {
+      used: number;
+      limit: number | null;
+      remaining: number | null;
+      level: null | "warning" | "exhausted";
+      approximateInterviewsRemaining: number | null;
+    };
   } | null>(null);
 
   useEffect(() => {
@@ -166,12 +185,11 @@ function QuotaMeters({ tenant }: { tenant: string }) {
 
   if (!usage) return null;
 
-  const rows = [
-    { label: "Interviews this month", used: usage.meter.interviewsUsed, limit: usage.limits.interviews },
-    { label: "CV screenings", used: usage.meter.screeningsUsed, limit: usage.limits.screenings },
-  ].filter((r) => r.limit !== null);
+  const { minutes } = usage;
+  const showMinutes = minutes.limit !== null;
+  const screeningLimit = usage.limits.screenings;
 
-  if (rows.length === 0) return null;
+  if (!showMinutes && screeningLimit === null) return null;
 
   return (
     <div className="mt-3.5 px-1 text-xs text-white/65">
@@ -187,8 +205,41 @@ function QuotaMeters({ tenant }: { tenant: string }) {
               style={{ width: `${Math.min(100, (r.used / r.limit!) * 100)}%` }}
             />
           </div>
+          <div className="usage-note">
+            {minutes.remaining} left
+            {minutes.approximateInterviewsRemaining !== null &&
+              ` · roughly ${minutes.approximateInterviewsRemaining} ${
+                minutes.approximateInterviewsRemaining === 1 ? "interview" : "interviews"
+              }`}
+          </div>
+          {minutes.level === "exhausted" ? (
+            <div className="usage-warning exhausted">
+              Out of minutes. Further interviews bill as overage.
+            </div>
+          ) : minutes.level === "warning" ? (
+            <div className="usage-warning">
+              {Math.round((minutes.used / minutes.limit!) * 100)}% of your minutes used.
+            </div>
+          ) : null}
         </div>
-      ))}
+      )}
+
+      {screeningLimit !== null && (
+        <div>
+          CV screenings
+          <span className="val">
+            {usage.meter.screeningsUsed} / {screeningLimit}
+          </span>
+          <div className="track">
+            <div
+              className="fill"
+              style={{
+                width: `${Math.min(100, (usage.meter.screeningsUsed / screeningLimit) * 100)}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

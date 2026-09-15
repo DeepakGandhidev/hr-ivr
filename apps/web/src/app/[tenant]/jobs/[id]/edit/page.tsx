@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import MarkdownEditor from "@/components/MarkdownEditor";
 
 interface JobVersion {
   id: string;
@@ -11,6 +12,13 @@ interface JobVersion {
   changeNote?: string | null;
   createdAt: string;
   author?: { name?: string | null; email: string } | null;
+}
+
+interface JobDescription {
+  id: string;
+  version: number;
+  bodyMd: string;
+  createdAt: string;
 }
 
 interface JobPost {
@@ -30,6 +38,7 @@ interface Job {
   goodToHaves: string[];
   versions?: JobVersion[];
   posts?: JobPost[];
+  descriptions?: JobDescription[];
 }
 
 const asList = (value: string) =>
@@ -47,6 +56,11 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
   const [mustHaves, setMustHaves] = useState("");
   const [goodToHaves, setGoodToHaves] = useState("");
   const [changeNote, setChangeNote] = useState("");
+  const [bodyMd, setBodyMd] = useState("");
+  // The JD as it was when the form loaded, so the warning about re-publishing
+  // can say whether the description specifically changed.
+  const [originalBody, setOriginalBody] = useState("");
+  const [viewingJd, setViewingJd] = useState<JobDescription | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -58,13 +72,26 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
       return;
     }
     const loaded: Job = data.job;
-    setJob(loaded);
     setTitle(loaded.title ?? "");
     setLocation(loaded.location ?? "");
     setSalaryBand(loaded.salaryBand ?? "");
     setExperienceRange(loaded.experienceRange ?? "");
     setMustHaves((loaded.mustHaves ?? []).join("\n"));
     setGoodToHaves((loaded.goodToHaves ?? []).join("\n"));
+
+    // Descriptions come from their own endpoint rather than from the job
+    // payload: that one is filtered to approved versions only, because the
+    // publish screen needs to distinguish "none written" from "not approved".
+    // Editing has to start from the newest version whether or not it has been
+    // approved, or an unapproved draft would silently be edited away.
+    const jdRes = await fetch(`/api/${tenant}/jobs/${id}/descriptions`);
+    const jdData = await jdRes.json().catch(() => ({}));
+    const descriptions: JobDescription[] = jdRes.ok ? jdData.descriptions ?? [] : [];
+
+    setJob({ ...loaded, descriptions });
+    const currentJd = descriptions[0]?.bodyMd ?? "";
+    setBodyMd(currentJd);
+    setOriginalBody(currentJd);
   }, [tenant, id]);
 
   useEffect(() => {
@@ -91,6 +118,7 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
           experienceRange: experienceRange || null,
           mustHaves: asList(mustHaves),
           goodToHaves: asList(goodToHaves),
+          bodyMd,
           ...(changeNote.trim() ? { changeNote: changeNote.trim() } : {}),
         }),
       });
@@ -129,6 +157,13 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
           <strong>This role is published.</strong> It is live on{" "}
           {livePosts.map((p) => p.channel).join(", ")}. Editing here does not update the live
           posting — you will need to publish again for applicants to see these changes.
+          {bodyMd !== originalBody && (
+            // Called out separately because the description is the part
+            // applicants actually read: a stale salary band is wrong, a stale
+            // JD is the whole advert.
+            <> <strong>The job description has changed</strong>, so the published
+            advert still shows the old text.</>
+          )}
         </div>
       )}
 
@@ -164,6 +199,21 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
         </label>
 
         <label>
+          <span>Job description</span>
+          <span className="subtle" style={{ display: "block", marginBottom: 6 }}>
+            The text candidates read, and the text Pratibha screens against.
+            Saving records a new description version; earlier ones stay readable
+            below.
+          </span>
+          <MarkdownEditor
+            value={bodyMd}
+            onChange={setBodyMd}
+            disabled={saving}
+            label="Job description body"
+          />
+        </label>
+
+        <label>
           <div className="subtle">What changed? (optional, saved with the version)</div>
           <input
             value={changeNote}
@@ -181,6 +231,60 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
           </button>
         </div>
       </form>
+
+      {(job.descriptions?.length ?? 0) > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h3>Job description versions</h3>
+          <div className="stack" style={{ gap: 10 }}>
+            {job.descriptions!.map((d, i) => (
+              <div key={d.id} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <strong>v{d.version}</strong>
+                  {i === 0 && <span className="badge badge-accent" style={{ marginLeft: 8 }}>current</span>}
+                  <div className="subtle">
+                    {d.bodyMd.slice(0, 90).replace(/\s+/g, " ")}
+                    {d.bodyMd.length > 90 ? "…" : ""}
+                  </div>
+                </div>
+                <div className="subtle" style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                  {new Date(d.createdAt).toLocaleDateString()}
+                  <br />
+                  <button type="button" className="sm ghost" onClick={() => setViewingJd(d)}>
+                    View
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {viewingJd && (
+        <div className="modal-backdrop" onClick={() => setViewingJd(null)} role="presentation">
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Job description version ${viewingJd.version}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="row" style={{ marginBottom: 10 }}>
+              <strong>Description v{viewingJd.version}</strong>
+              <span className="subtle" style={{ marginLeft: 8 }}>
+                {new Date(viewingJd.createdAt).toLocaleString()}
+              </span>
+              <button
+                className="ghost sm"
+                style={{ marginLeft: "auto" }}
+                onClick={() => setViewingJd(null)}
+              >
+                Close
+              </button>
+            </div>
+            <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{viewingJd.bodyMd}</div>
+          </div>
+        </div>
+      )}
 
       {(job.versions?.length ?? 0) > 0 && (
         <div className="card" style={{ marginTop: 16 }}>

@@ -203,10 +203,14 @@ export async function verifyConnection(connection) {
  * next poll tick. The poller remains the source of truth; this only nudges it,
  * which means a dropped IDLE socket degrades to polling rather than to silence.
  */
+const IDLE_BACKOFF_CAP_MS = 6 * 60 * 60 * 1000;
+const ROLL_OFF_ATTEMPTS = 12;
+
 export function watchMailbox(connection, onNewMail, logger = console) {
   let client = null;
   let stopped = false;
   let backoffMs = 5_000;
+  let attempts = 0;
 
   async function run() {
     while (!stopped) {
@@ -215,6 +219,7 @@ export function watchMailbox(connection, onNewMail, logger = console) {
         await client.connect();
         await client.mailboxOpen(connection.folder || 'INBOX');
         backoffMs = 5_000;
+        attempts = 0;
         logger.info?.({ connectionId: connection.id, address: connection.address }, 'IMAP IDLE established');
 
         client.on('exists', (data) => {
@@ -236,10 +241,24 @@ export function watchMailbox(connection, onNewMail, logger = console) {
       }
 
       if (stopped) return;
+
+      // Five minutes was the cap, retried forever, and that is not a backoff -
+      // it is a steady login attempt every five minutes, all day, for as long
+      // as the mailbox stays broken. The production host's firewall read three
+      // of those against one server as a brute-force attempt and banned the IP.
+      // So the cap is hours now, and after ROLL_OFF_ATTEMPTS the watcher stops
+      // rather than retrying something that has failed for half a day.
+      attempts += 1;
+      if (attempts >= ROLL_OFF_ATTEMPTS) {
+        logger.warn?.(
+          { connectionId: connection.id, address: connection.address, attempts },
+          'IMAP IDLE giving up until the mailbox is reconnected'
+        );
+        return;
+      }
+
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
-      // Back off to a few minutes so a mailbox with a bad password does not
-      // hammer the mail server (and trip its brute-force protection).
-      backoffMs = Math.min(backoffMs * 2, 5 * 60_000);
+      backoffMs = Math.min(backoffMs * 2, IDLE_BACKOFF_CAP_MS);
     }
   }
 

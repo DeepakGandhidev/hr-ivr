@@ -1,5 +1,5 @@
 import { prisma, withTenant } from '@pratibha/prisma';
-import { TRIAL_LIMITS } from '@pratibha/shared';
+import { TRIAL_LIMITS, advanceCandidateStatus } from '@pratibha/shared';
 import { LlmProvider } from './provider.js';
 import { getOrCreateUsageMeter, incrementScreeningUsage } from '../db/index.js';
 
@@ -159,6 +159,25 @@ export async function runScreening(candidateId, config, logger = console) {
         where: { shortlistId_candidateId: { shortlistId: shortlist.id, candidateId } },
         update: {},
         create: { shortlistId: shortlist.id, candidateId, addedBy: 'ai' },
+      });
+    }
+
+    // Same progression as the recruiter-triggered screen in the web app, kept
+    // in the shared helper so the two paths cannot drift: forward only, and a
+    // manual judgement is never overwritten.
+    await advanceCandidateStatus(tx, {
+      tenantId,
+      candidateId,
+      to: 'screened',
+      reason: 'CV screening completed',
+    });
+
+    if (created.verdict === 'shortlist') {
+      await advanceCandidateStatus(tx, {
+        tenantId,
+        candidateId,
+        to: 'shortlisted',
+        reason: 'Screening verdict placed them on the draft shortlist',
       });
     }
 

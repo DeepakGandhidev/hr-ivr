@@ -172,22 +172,6 @@ export default function ProtocolsPage({ params }: { params: { tenant: string } }
     }
   }
 
-  async function saveCompany() {
-    setError(null);
-    setMessage(null);
-    const res = await fetch(`/api/${tenant}/settings`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: companyName }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setError(data.message || "Failed to save company name");
-      return;
-    }
-    setMessage("Company name updated. The agent will use it on the next call.");
-  }
-
   const scopeLabel = scope ? jobs.find((j) => j.id === scope)?.title ?? "this job" : "all jobs";
   const overrides = protocols.filter((p) => p.jobId).length;
   const activeDifficulty = DIFFICULTY.find((d) => d.value === draft.difficulty)!;

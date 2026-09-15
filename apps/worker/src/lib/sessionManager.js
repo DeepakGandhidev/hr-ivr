@@ -37,11 +37,20 @@ export class SessionManager {
       timeConsent: null,           // null | 'now' | 'later' | 'withdrew'
       criteriaCovered: [],
       criteriaNotCovered: [],
+      // Set only by finish_screening, which is the sole way into CANDIDATE_QA.
+      // This is the evidence that the questions were actually covered, and it
+      // is deliberately not inferred from `state`: finish() sets CLOSE on every
+      // ending, including a drop at question two.
+      screeningFinished: false,
       escalation: null,
       outcome: null,
       codeAttempts: 0,
       dtmfBuffer: '',
       questionsAsked: 0,
+      /// Set when the first question is put. Billing runs from this moment, not
+      /// from when the call connected - greeting, disclosure, identity and
+      /// consent are deliberately unbilled.
+      firstQuestionAt: null,
       transcript: null,
       ended: false,
 

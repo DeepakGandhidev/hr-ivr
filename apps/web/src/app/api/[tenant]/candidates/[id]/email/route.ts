@@ -3,7 +3,7 @@ import { Action, NotFoundError, ValidationError, writeAuditLog } from "@pratibha
 import { adminPrisma, type PrismaClient } from "@pratibha/prisma";
 import { authorizeTenant } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
-import { outreachFromAddress, sendAsTenant } from "@/lib/email";
+import { outreachFromAddress, sendAsTenant, tenantLogoUrl } from "@/lib/email";
 import { defaultInterviewInviteVars, renderTemplate } from "@/lib/templates";
 import { z } from "zod";
 
@@ -65,6 +65,14 @@ export async function POST(
       referenceCode: "",
     });
 
+    // The company's logo, if they have set one. Candidate-facing mail is a
+    // brand surface; the internal team notifications are not, and do not get it.
+    const branding = await adminPrisma.companyProfile.findUnique({
+      where: { tenantId: ctx.tenant.id },
+      select: { logoAssetId: true },
+    });
+    const logoUrl = tenantLogoUrl(ctx.tenant.slug, Boolean(branding?.logoAssetId));
+
     const subject = renderTemplate(parsed.data.subject, vars);
     const body = renderTemplate(parsed.data.body, vars);
 
@@ -75,6 +83,7 @@ export async function POST(
       subject,
       body,
       from: outreachFromAddress(ctx.tenant.slug, ctx.tenant.name),
+      ...(logoUrl ? { logoUrl } : {}),
       ...(connection?.address ? { replyTo: connection.address } : {}),
     });
 

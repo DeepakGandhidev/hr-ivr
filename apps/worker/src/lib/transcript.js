@@ -37,6 +37,41 @@ export class CallTranscript {
 
   elapsed() { return Date.now() - this.startedAt; }
 
+  /**
+   * The conversation, as turns, for storing on the call row.
+   *
+   * Only what was actually said: `caller` and `pratibha`. The entries list also
+   * carries interim ASR, tool calls, state changes and latency figures, which
+   * are for debugging a call rather than reading one - a transcript with
+   * eighteen partial guesses at one sentence is not a transcript.
+   *
+   * Consecutive turns by the same speaker are merged, because she streams a
+   * reply sentence by sentence and each one is recorded separately: unmerged,
+   * a single question renders as four consecutive Pratibha bubbles.
+   */
+  turns() {
+    const out = [];
+
+    for (const entry of this.entries) {
+      if (entry.kind !== 'caller' && entry.kind !== 'pratibha') continue;
+
+      const text = String(entry.text ?? '').trim();
+      if (!text) continue;
+
+      const speaker = entry.kind === 'caller' ? 'candidate' : 'pratibha';
+      const previous = out[out.length - 1];
+
+      if (previous && previous.speaker === speaker) {
+        previous.text = `${previous.text} ${text}`.trim();
+        continue;
+      }
+
+      out.push({ speaker, text, atMs: entry.elapsedMs ?? 0 });
+    }
+
+    return out;
+  }
+
   static formatElapsed(ms) {
     const mins = Math.floor(ms / 60000);
     const secs = Math.floor((ms % 60000) / 1000);

@@ -1,5 +1,15 @@
 import type { PrismaClient, Prisma } from '@pratibha/prisma';
 
+/**
+ * The slice of the client this module uses.
+ *
+ * Typed as the capability rather than the whole client so a transaction handle
+ * is accepted: audit entries most want writing inside the transaction that made
+ * the change, and demanding the full PrismaClient forced every such caller
+ * through a double cast that quietly defeated the type entirely.
+ */
+type AuditDb = Pick<PrismaClient, 'auditLog'>;
+
 export interface AuditEntry {
   tenantId: string;
   actor: string;
@@ -12,7 +22,7 @@ export interface AuditEntry {
 }
 
 export async function writeAuditLog(
-  prisma: PrismaClient,
+  prisma: AuditDb,
   entry: AuditEntry
 ): Promise<void> {
   await prisma.auditLog.create({
@@ -30,7 +40,7 @@ export async function writeAuditLog(
 }
 
 export async function logAuthzDenial(
-  prisma: PrismaClient,
+  prisma: AuditDb,
   tenantId: string,
   actor: string,
   action: string,

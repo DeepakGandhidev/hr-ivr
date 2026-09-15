@@ -98,7 +98,7 @@ export default async function JobDetailPage({ params }: { params: { tenant: stri
         <Link href={`/${tenant}/jobs/${id}/candidates`} className="btn">Candidates</Link>
         <Link href={`/${tenant}/jobs/${id}/shortlist`} className="btn">Shortlist</Link>
         <Link href={`/${tenant}/jobs/${id}/publish`} className="btn">Publish</Link>
-        <Link href={`/${tenant}/jobs/${id}/reports`} className="btn">Reports</Link>
+        <Link href={`/${tenant}/jobs/${id}/interviews`} className="btn">Interviews</Link>
       </div>
 
       {facts.length > 0 && (

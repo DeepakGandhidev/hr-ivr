@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { Action } from "@pratibha/shared";
 import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
+import { Prisma } from "@pratibha/prisma";
 
 export const runtime = "nodejs";
 
@@ -51,12 +52,25 @@ export async function GET(
         ...(status ? { status: status as never } : {}),
       };
 
-      const [calls, jobs] = await Promise.all([
+      const [calls, jobs, transcribed] = await Promise.all([
         tx.interviewCall.findMany({
           where,
           orderBy: { startedAt: "desc" },
           take: 500,
-          include: {
+          // Explicit select, not include: `transcript` is the whole
+          // conversation, and up to 500 of them would make this list payload
+          // megabytes to render a table that shows none of the text. The page
+          // only needs to know whether there is one to open; the transcript
+          // itself is fetched per call, on demand.
+          select: {
+            id: true,
+            startedAt: true,
+            endedAt: true,
+            status: true,
+            language: true,
+            recognised: true,
+            recordingRef: true,
+            transcriptRef: true,
             candidate: {
               select: { id: true, name: true, email: true, job: { select: { id: true, title: true } } },
             },
@@ -68,7 +82,15 @@ export async function GET(
           select: { id: true, title: true },
           orderBy: { title: "asc" },
         }),
+        // Which calls have a transcript, as ids only. The table needs to know
+        // whether the link leads anywhere; it does not need the text to say so.
+        tx.interviewCall.findMany({
+          where: { ...where, NOT: { transcript: { equals: Prisma.DbNull } } },
+          select: { id: true },
+        }),
       ]);
+
+      const hasTranscript = new Set(transcribed.map((c) => c.id));
 
       // Summed from endedAt - startedAt rather than from a stored duration,
       // because no duration is stored. A call still in progress contributes
@@ -82,7 +104,7 @@ export async function GET(
       }
 
       return {
-        calls,
+        calls: calls.map((c) => ({ ...c, hasTranscript: hasTranscript.has(c.id) })),
         jobs,
         totals: {
           calls: calls.length,

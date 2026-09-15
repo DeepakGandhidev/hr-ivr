@@ -20,6 +20,8 @@ function meter(overrides = {}) {
     tenantId: "tenant-1",
     period: "2026-09",
     interviewsUsed: 0,
+    interviewMinutesUsed: 0,
+    overageMinutes: 0,
     screeningsUsed: 0,
     overageInterviews: 0,
     overageScreenings: 0,
@@ -64,20 +66,52 @@ describe("Usage metering", () => {
     expect(result.overage).toBe(true);
   });
 
-  it("increments interview usage", async () => {
-    tx.usageMeter.findUnique.mockResolvedValue(meter({ interviewsUsed: 2 }));
-    tx.usageMeter.update.mockResolvedValue(meter({ interviewsUsed: 3 }));
+  // Pricing is per minute, so the meter is charged in minutes. The interview
+  // count still increments because it describes what happened.
+  it("charges the call's minutes against the quota", async () => {
+    tx.usageMeter.findUnique.mockResolvedValue(meter({ interviewMinutesUsed: 100 }));
+    tx.usageMeter.update.mockResolvedValue(meter({ interviewMinutesUsed: 112 }));
 
-    const result = await incrementInterviewUsage(tx, "tenant-1", 15);
+    const result = await incrementInterviewUsage(tx, "tenant-1", 600, 12);
+
     expect(result.ok).toBe(true);
     expect(result.overage).toBe(false);
+    expect(tx.usageMeter.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          interviewsUsed: { increment: 1 },
+          interviewMinutesUsed: { increment: 12 },
+        }),
+      })
+    );
+  });
+
+  // A call straddling the ceiling is split rather than rounded either way:
+  // charging the whole call as overage overcharges, and charging none of it
+  // undercharges.
+  it("splits a call that crosses the quota ceiling", async () => {
+    tx.usageMeter.findUnique.mockResolvedValue(meter({ interviewMinutesUsed: 595 }));
+    tx.usageMeter.update.mockResolvedValue(meter({ interviewMinutesUsed: 600, overageMinutes: 7 }));
+
+    const result = await incrementInterviewUsage(tx, "tenant-1", 600, 12);
+
+    expect(result.overage).toBe(true);
+    expect(result.overageMinutes).toBe(7);
+    expect(tx.usageMeter.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          interviewMinutesUsed: { increment: 5 },
+          overageMinutes: { increment: 7 },
+        }),
+      })
+    );
   });
 
   it("treats an unlimited plan as never in overage", async () => {
-    tx.usageMeter.findUnique.mockResolvedValue(meter({ interviewsUsed: 9999 }));
-    tx.usageMeter.update.mockResolvedValue(meter({ interviewsUsed: 10000 }));
+    tx.usageMeter.findUnique.mockResolvedValue(meter({ interviewMinutesUsed: 9999 }));
+    tx.usageMeter.update.mockResolvedValue(meter({ interviewMinutesUsed: 10011 }));
 
-    const result = await incrementInterviewUsage(tx, "tenant-1", null);
+    const result = await incrementInterviewUsage(tx, "tenant-1", null, 12);
     expect(result.overage).toBe(false);
   });
 });

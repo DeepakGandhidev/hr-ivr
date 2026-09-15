@@ -1,4 +1,5 @@
 import { prisma } from '@pratibha/prisma';
+import { advanceCandidateStatus } from '@pratibha/shared';
 import { emailsMatch, normaliseSpokenEmail } from '../lib/emailMatch.js';
 
 // Worker queries cross tenant boundaries for caller recognition, so this process
@@ -254,6 +255,9 @@ export async function updateInterviewCall(id, payload) {
       ...(payload.status !== undefined && { status: payload.status }),
       ...(payload.recordingRef !== undefined && { recordingRef: payload.recordingRef }),
       ...(payload.transcriptRef !== undefined && { transcriptRef: payload.transcriptRef }),
+      ...(payload.firstQuestionAt !== undefined && { firstQuestionAt: payload.firstQuestionAt }),
+      ...(payload.billableMinutes !== undefined && { billableMinutes: payload.billableMinutes }),
+      ...(payload.transcript !== undefined && { transcript: payload.transcript }),
       ...(payload.telephonyCost !== undefined && { telephonyCost: payload.telephonyCost }),
       ...(payload.llmCostUsd !== undefined && { llmCostUsd: payload.llmCostUsd }),
       ...(payload.ttsCostUsd !== undefined && { ttsCostUsd: payload.ttsCostUsd }),
@@ -263,7 +267,7 @@ export async function updateInterviewCall(id, payload) {
 }
 
 export async function createAssessmentReport(payload) {
-  return prisma.assessmentReport.create({
+  const report = await prisma.assessmentReport.create({
     data: {
       interviewCallId: payload.interviewCallId,
       overallScore: payload.overallScore,
@@ -272,8 +276,41 @@ export async function createAssessmentReport(payload) {
       strengths: payload.strengths ?? [],
       concerns: payload.concerns ?? [],
       notableQuotes: payload.notableQuotes ?? {},
+      interviewScore: payload.interviewScore ?? null,
+      interviewScoreReasoning: payload.interviewScoreReasoning ?? null,
+      jdFitSummary: payload.jdFitSummary ?? null,
+      recommendationScore: payload.recommendationScore ?? null,
+      recommendationVerdict: payload.recommendationVerdict ?? null,
+      questionAnswers: payload.questionAnswers ?? [],
     },
   });
+
+  // "Interviewed" means the call happened AND produced a report, which is the
+  // same bar billing uses - so it is set here, where the report lands, rather
+  // than when the call ends. A call that never yields a report leaves the
+  // candidate where they were.
+  //
+  // Never allowed to fail the report: the assessment is the artifact worth
+  // keeping, and a status label is not worth losing it over.
+  try {
+    const call = await prisma.interviewCall.findUnique({
+      where: { id: payload.interviewCallId },
+      select: { candidate: { select: { id: true, tenantId: true } } },
+    });
+
+    if (call?.candidate) {
+      await advanceCandidateStatus(prisma, {
+        tenantId: call.candidate.tenantId,
+        candidateId: call.candidate.id,
+        to: 'interviewed',
+        reason: 'Interview completed and assessment report generated',
+      });
+    }
+  } catch {
+    // Left to the next event to correct; the report itself is already saved.
+  }
+
+  return report;
 }
 
 export async function getOrCreateUsageMeter(tenantId, period = currentPeriod()) {
@@ -292,11 +329,28 @@ export async function incrementScreeningUsage(tenantId, period = currentPeriod()
   });
 }
 
-export async function incrementInterviewUsage(tenantId, period = currentPeriod()) {
+/**
+ * Record a billed call against the month's meter.
+ *
+ * Minutes are the quota; the interview count rides along because the UI shows
+ * an approximate interview figure beside the minutes, and because historical
+ * periods should keep reading correctly.
+ */
+export async function incrementInterviewUsage(tenantId, minutes, period = currentPeriod()) {
+  const billed = Math.max(0, Math.round(Number(minutes) || 0));
+
   return prisma.usageMeter.upsert({
     where: { tenantId_period: { tenantId, period } },
-    update: { interviewsUsed: { increment: 1 } },
-    create: { tenantId, period, interviewsUsed: 1 },
+    update: {
+      interviewsUsed: { increment: 1 },
+      interviewMinutesUsed: { increment: billed },
+    },
+    create: {
+      tenantId,
+      period,
+      interviewsUsed: 1,
+      interviewMinutesUsed: billed,
+    },
   });
 }
 

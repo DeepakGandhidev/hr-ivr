@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { Action, NotFoundError, updateShortlistSchema, ValidationError } from "@pratibha/shared";
+import { Action, NotFoundError, updateShortlistSchema, ValidationError, advanceCandidateStatus } from "@pratibha/shared";
 import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { z } from "zod";
@@ -80,6 +80,18 @@ export async function POST(
             candidateId: candidate.id,
             addedBy: ctx.user.id,
           },
+        });
+
+        // Being on a shortlist is the candidate's pipeline position, so the
+        // status follows the row. It is a label only: the approval row that
+        // gates outreach is a separate, explicit step, and nothing here
+        // creates one or contacts anybody.
+        await advanceCandidateStatus(tx, {
+          tenantId: ctx.tenant.id,
+          candidateId: candidate.id,
+          to: "shortlisted",
+          actor: ctx.user.id,
+          reason: "Added to the draft shortlist",
         });
       } else {
         await tx.shortlistItem.updateMany({

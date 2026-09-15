@@ -48,6 +48,253 @@ enum TenantStatus {
   suspended
 }
 
+/// The company's own details, as distinct from how it sounds on a call.
+///
+/// `legalName` here is what goes on an invoice or a contract. The name Pratibha
+/// says out loud lives on InterviewProtocol.companyName, scoped per job, and the
+/// two are deliberately separate: a company hiring under a brand still invoices
+/// under its registered entity.
+///
+/// One row per tenant, created on demand rather than at signup - an empty
+/// profile and no profile mean the same thing, and the second needs no migration
+/// to backfill.
+model CompanyProfile {
+  id              String   @id @default(cuid())
+  tenantId        String   @unique @map("tenant_id")
+
+  /// Registered entity name, for invoices and contracts.
+  legalName       String?  @map("legal_name")
+  /// Registered / billing address, free-form: Indian addresses do not fit
+  /// fixed fields, and an invoice needs it as written.
+  billingAddress  String?  @map("billing_address")
+  /// State, which decides CGST+SGST versus IGST on an invoice. Held separately
+  /// from the address because it is a calculation input, not decoration.
+  billingState    String?  @map("billing_state")
+  gstin           String?
+  /// Shown on the hosted careers page.
+  description     String?
+
+  /// The logo, as a TenantAsset id. Not a URL: the file is served through a
+  /// tenant-scoped route, so storing a path would invite bypassing it.
+  logoAssetId     String?  @map("logo_asset_id")
+
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  logo            TenantAsset? @relation("CompanyLogo", fields: [logoAssetId], references: [id], onDelete: SetNull)
+
+  @@map("company_profiles")
+}
+
+enum TenantAssetKind {
+  company_logo
+  user_photo
+}
+
+/// A file belonging to a tenant.
+///
+/// Rows here are the index; the bytes live behind the storage driver
+/// (`apps/web/src/lib/storage.ts`), which is local disk today and swappable.
+/// Keeping an index in the database is what makes these findable for the
+/// deletion flow - files written straight to disk with a path in a column are
+/// exactly the ones nobody remembers to delete.
+///
+/// `tenantId` cascades, so deleting a tenant removes the rows; the storage
+/// driver is called alongside to remove the bytes.
+model TenantAsset {
+  id          String          @id @default(cuid())
+  tenantId    String          @map("tenant_id")
+  kind        TenantAssetKind
+  /// Opaque key for the storage driver. Never a browser-reachable URL.
+  storageKey  String          @map("storage_key")
+  contentType String          @map("content_type")
+  byteSize    Int             @map("byte_size")
+  uploadedBy  String?         @map("uploaded_by")
+  createdAt   DateTime        @default(now()) @map("created_at")
+
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  companyLogos CompanyProfile[] @relation("CompanyLogo")
+  userPhotos   User[]          @relation("UserPhoto")
+
+  @@index([tenantId, kind])
+  @@map("tenant_assets")
+}
+
+enum SubscriptionStatus {
+  trialing
+  active
+  past_due
+  /// Cancelled but still inside the paid period.
+  cancelling
+  /// Period over: read-only, pending deletion.
+  expired
+}
+
+enum MandateStatus {
+  none
+  pending
+  active
+  failed
+  revoked
+}
+
+enum InvoiceStatus {
+  draft
+  issued
+  paid
+  void
+}
+
+/// What a tenant is paying for, and where they are in the cycle.
+///
+/// Separate from Tenant.planId, which stays as the fast path everything else
+/// already reads. This row carries the billing state that planId cannot express:
+/// when the period ends, whether a cancellation is pending, and why.
+model Subscription {
+  id                 String             @id @default(cuid())
+  tenantId           String             @unique @map("tenant_id")
+  planId             String             @map("plan_id")
+  status             SubscriptionStatus @default(trialing)
+
+  /// The billing cycle. "Days left" on the subscriptions page is the single
+  /// most important number on it, and it comes from here.
+  periodStart        DateTime           @map("period_start")
+  periodEnd          DateTime           @map("period_end")
+
+  /// Minutes bought on top of the plan, for this period. Spent after the plan
+  /// allowance, so a top-up cannot silently expire while plan minutes remain.
+  topUpMinutes       Int                @default(0) @map("top_up_minutes")
+
+  /// Set when cancellation is requested, not when it takes effect - the
+  /// customer keeps what they paid for until periodEnd.
+  cancelRequestedAt  DateTime?          @map("cancel_requested_at")
+  cancelReason       String?            @map("cancel_reason")
+  cancelComment      String?            @map("cancel_comment")
+
+  /// Finance's address, deliberately not a portal login: an invoice should
+  /// reach the person who pays without giving them the hiring data.
+  billingContactEmail String?           @map("billing_contact_email")
+  /// Which billing emails that contact receives, as { key: boolean }.
+  billingContactPrefs Json?             @map("billing_contact_prefs")
+
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  paymentMethods     PaymentMethod[]
+  invoices           Invoice[]
+  couponRedemptions  CouponRedemption[]
+
+  @@map("subscriptions")
+}
+
+/// A stored payment instrument.
+///
+/// No card data of our own: `providerRef` is the gateway's token and the brand
+/// and last four are display only. Nothing here is enough to charge anybody,
+/// which is the point - the moment this table could, it would need PCI scope.
+model PaymentMethod {
+  id             String        @id @default(cuid())
+  subscriptionId String        @map("subscription_id")
+  /// Which gateway issued the token, so a provider switch is detectable rather
+  /// than a silent mismatch.
+  provider       String
+  providerRef    String        @map("provider_ref")
+  brand          String?
+  last4          String?
+  mandateStatus  MandateStatus @default(none) @map("mandate_status")
+  isDefault      Boolean       @default(false) @map("is_default")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  subscription   Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, isDefault])
+  @@map("payment_methods")
+}
+
+/// One issued invoice.
+///
+/// Seller and buyer details are SNAPSHOTTED rather than joined. An invoice is a
+/// legal record of what was true when it was issued: if the customer later
+/// corrects their GSTIN or we move to a different selling entity, last
+/// quarter's invoice must not silently change to match.
+model Invoice {
+  id             String        @id @default(cuid())
+  subscriptionId String        @map("subscription_id")
+  /// Human-readable, gapless per financial year, e.g. PMT/2026-27/0007.
+  number         String        @unique
+  status         InvoiceStatus @default(issued)
+
+  periodStart    DateTime      @map("period_start")
+  periodEnd      DateTime      @map("period_end")
+  issuedAt       DateTime      @default(now()) @map("issued_at")
+  paidAt         DateTime?     @map("paid_at")
+
+  /// Line items: description, hsnSac, quantity, unitPaise, amountPaise.
+  lines          Json
+
+  /// Money in paise. Integers, because floating point on money produces
+  /// invoices that are off by a rupee and a CA who stops trusting them.
+  subtotalPaise  Int           @map("subtotal_paise")
+  discountPaise  Int           @default(0) @map("discount_paise")
+  cgstPaise      Int           @default(0) @map("cgst_paise")
+  sgstPaise      Int           @default(0) @map("sgst_paise")
+  igstPaise      Int           @default(0) @map("igst_paise")
+  totalPaise     Int           @map("total_paise")
+
+  /// The customer's state at issue time. Decides the tax split, so it is
+  /// recorded rather than recomputed.
+  placeOfSupply  String        @map("place_of_supply")
+  seller         Json
+  buyer          Json
+
+  subscription   Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, issuedAt])
+  @@map("invoices")
+}
+
+enum CouponKind {
+  percent
+  amount
+  minutes
+}
+
+/// A redeemable code. Platform-wide, not tenant-scoped - hence no tenantId and
+/// no RLS policy; redemptions are what belong to a tenant.
+model Coupon {
+  id           String     @id @default(cuid())
+  code         String     @unique
+  kind         CouponKind
+  /// Percent (1-100), paise, or minutes, according to `kind`.
+  value        Int
+  /// Null means unlimited.
+  maxRedemptions Int?     @map("max_redemptions")
+  redeemedCount  Int      @default(0) @map("redeemed_count")
+  expiresAt    DateTime?  @map("expires_at")
+  active       Boolean    @default(true)
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  redemptions  CouponRedemption[]
+
+  @@map("coupons")
+}
+
+model CouponRedemption {
+  id             String       @id @default(cuid())
+  couponId       String       @map("coupon_id")
+  subscriptionId String       @map("subscription_id")
+  redeemedAt     DateTime     @default(now()) @map("redeemed_at")
+
+  coupon         Coupon       @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  /// One tenant cannot redeem the same code twice.
+  @@unique([couponId, subscriptionId])
+  @@map("coupon_redemptions")
+}
+
 model Tenant {
   id            String       @id @default(cuid())
   name          String
@@ -56,6 +303,10 @@ model Tenant {
   trialEndsAt   DateTime?    @map("trial_ends_at")
   status        TenantStatus @default(trial)
   createdAt     DateTime     @default(now()) @map("created_at")
+
+  companyProfile CompanyProfile?
+  assets        TenantAsset[]
+  subscription  Subscription?
 
   plan          Plan         @relation(fields: [planId], references: [id])
   users         User[]
@@ -86,7 +337,29 @@ model User {
   authProviderId  String?  @unique @map("auth_provider_id")
   createdAt       DateTime @default(now()) @map("created_at")
 
+  // --- Personal profile ----------------------------------------------------
+
+  /// Profile photo, as a TenantAsset id. Same reasoning as the company logo:
+  /// the file is served through a tenant-scoped route, never a bare path.
+  photoAssetId    String?  @map("photo_asset_id")
+
+  /// IANA zone, e.g. "Asia/Kolkata". Timestamps are stored in UTC; this only
+  /// decides how they are rendered for this person.
+  timezone        String?
+
+  /// Which emails this person receives, as { key: boolean }. Absent keys mean
+  /// "on" - a notification type added later should reach people rather than be
+  /// silently off for everyone who has ever saved preferences.
+  notificationPrefs Json?  @map("notification_prefs")
+
+  /// Two-factor authentication is deliberately NOT stored here. GoTrue owns it
+  /// (auth.mfa_factors) and is the thing that actually gates a login; a second
+  /// secret in this table could only be checked by our own screens, which an
+  /// attacker with the password would simply not visit. Enrolment status is
+  /// read from GoTrue rather than mirrored, so the two cannot disagree.
+
   tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  photo           TenantAsset? @relation("UserPhoto", fields: [photoAssetId], references: [id], onDelete: SetNull)
   jobsCreated     Job[]    @relation("CreatedBy")
   jobsDeleted     Job[]    @relation("DeletedBy")
   jobVersions     JobVersion[] @relation("JobVersionAuthor")
@@ -297,6 +570,24 @@ model JobPost {
 // Candidates & screening
 // ---------------------------------------------------------------------------
 
+/// Where a candidate stands in the pipeline.
+///
+/// One field, deliberately: a board view added later reads this rather than
+/// deriving a second state machine from screenings, shortlist rows and reports.
+///
+/// The first four are reached on their own as those events happen. The last
+/// three are judgements and are only ever set by a person - nothing in the
+/// system infers that someone was hired.
+enum CandidateStatus {
+  inbox
+  screened
+  shortlisted
+  interviewed
+  advance_stage
+  hired
+  rejected
+}
+
 model Candidate {
   id                String   @id @default(cuid())
   tenantId          String   @map("tenant_id")
@@ -309,6 +600,13 @@ model Candidate {
   sourceEmailMsgId  String?  @unique @map("source_email_msg_id")
   parseFailed       Boolean  @default(false) @map("parse_failed")
   noPhone           Boolean  @default(false) @map("no_phone")
+
+  /// Pipeline position. Automatic progression only moves forward and never
+  /// overwrites a manual judgement - see `advanceCandidateStatus` in
+  /// @pratibha/shared. Who changed it, from what and when lives in AuditLog
+  /// under the `candidate.status` action, which is what the activity timeline
+  /// renders.
+  status            CandidateStatus @default(inbox)
 
   /// How this candidate reached this job: 'auto' (matched by the router),
   /// 'fallback' (matched nothing, filed in the mailbox's fallback job),
@@ -332,6 +630,8 @@ model Candidate {
   @@unique([tenantId, jobId, phoneE164])
   @@index([tenantId, phoneE164])
   @@index([tenantId, jobId, email])
+  // The candidates list filters and groups by status within a job.
+  @@index([tenantId, jobId, status])
   @@map("candidates")
 }
 
@@ -575,6 +875,25 @@ model InterviewCall {
   status          InterviewCallStatus?
   recordingRef    String?               @map("recording_ref")
   transcriptRef   String?               @map("transcript_ref")
+
+  /// The conversation itself: an ordered array of
+  /// `{ speaker: 'pratibha' | 'candidate', text, atMs }`.
+  ///
+  /// Held here rather than behind `transcriptRef` because nothing ever wrote
+  /// that ref - it points at a durable copy in ProMonkey OS the worker has no
+  /// code to send, so every call in production had a null transcript and the
+  /// portal had nothing to show. On the call row it inherits the tenant
+  /// isolation and the delete cascade the candidate's record already has.
+  transcript      Json?
+  /// When the first question was put. Billing runs from here, not from when
+  /// the phone was answered: greeting, disclosure, identity and consent are
+  /// deliberately not charged for, and that is what customers are told.
+  firstQuestionAt DateTime?             @map("first_question_at")
+  /// What this call was billed, in whole minutes. Stored rather than derived so
+  /// an invoice can be reconciled against the call that produced it, even if
+  /// the rounding rule changes later.
+  billableMinutes Int?                  @map("billable_minutes")
+
   telephonyCost   Float?                @map("telephony_cost")
   llmCostUsd      Float?                @map("llm_cost_usd")
   ttsCostUsd      Float?                @map("tts_cost_usd")
@@ -605,6 +924,31 @@ model AssessmentReport {
   notableQuotes     Json              @map("notable_quotes")
   generatedAt       DateTime          @default(now()) @map("generated_at")
 
+  // --- The report as the recruiter reads it -------------------------------
+  //
+  // Two scores, deliberately separate and allowed to disagree. `interviewScore`
+  // is how the conversation went; `recommendationScore` is the verdict on the
+  // whole picture - JD, CV screening and interview together. Somebody can
+  // interview well and screen badly, and collapsing that into one number is
+  // exactly the information a hiring manager needs and would lose.
+
+  /// Section 1: how the interview itself went, 0-10.
+  interviewScore          Float?   @map("interview_score")
+  /// Why that score, written out. A number with no argument cannot be checked.
+  interviewScoreReasoning String?  @map("interview_score_reasoning")
+
+  /// Section 2: question-and-answer pairs, derived from the stored transcript
+  /// rather than asked of the model - the conversation is already on record,
+  /// and regenerating it invites invented questions.
+  questionAnswers         Json?    @map("question_answers")
+
+  /// Section 3: how this candidate fits this role's actual requirements.
+  jdFitSummary            String?  @map("jd_fit_summary")
+
+  /// Section 4: the overall verdict, 0-10, across screening and interview.
+  recommendationScore     Float?   @map("recommendation_score")
+  recommendationVerdict   String?  @map("recommendation_verdict")
+
   interviewCall     InterviewCall     @relation(fields: [interviewCallId], references: [id], onDelete: Cascade)
 
   @@map("assessment_reports")
@@ -618,9 +962,14 @@ model UsageMeter {
   id                  String   @id @default(cuid())
   tenantId            String   @map("tenant_id")
   period              String   // YYYY-MM
+  /// Retained so historical periods still read correctly, and because the UI
+  /// shows an approximate interview count beside the minutes. Not the quota.
   interviewsUsed      Int      @default(0) @map("interviews_used")
+  /// The quota that is actually enforced and billed. Pricing is per minute.
+  interviewMinutesUsed Int     @default(0) @map("interview_minutes_used")
   screeningsUsed      Int      @default(0) @map("screenings_used")
   overageInterviews   Int      @default(0) @map("overage_interviews")
+  overageMinutes      Int      @default(0) @map("overage_minutes")
   overageScreenings   Int      @default(0) @map("overage_screenings")
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")

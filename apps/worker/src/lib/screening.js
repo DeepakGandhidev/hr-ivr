@@ -13,6 +13,15 @@ const MAX_HISTORY = 40;
 // Tools the model may chain within one caller turn before we stop and escalate.
 const MAX_TOOL_CHAIN = 4;
 
+// A spoken goodbye, in the languages Pratibha screens in.
+//
+// The model reliably says farewell and unreliably calls end_call - it treats
+// the closing line as the end of its job and stops, which leaves the session
+// open with nothing to hang up the phone. Matching the farewell is a backstop
+// for the tool, not a replacement: end_call remains the intended path, and this
+// only fires in CANDIDATE_QA, where the only thing left to do is stop.
+const CLOSING_REMARK = /(have a (good|great|nice) (day|evening|one)|thank you for your time|thanks for your time|that(’s|'s| is) all (for now|from my side)|that(’s|'s| is) everything from my side|good ?bye|take care|dhanyavaad|dhanyawad|shukriya|alvida)/i;
+
 /**
  * How hard the questions should be.
  *
@@ -328,7 +337,16 @@ TOOLS AVAILABLE TO YOU RIGHT NOW: ${this.tools.definitionsFor(session.state).map
     if (reply) {
       session.history.push({ role: 'assistant', content: reply });
       spoke = true;
-      if (session.state === STATES.SCREEN) session.questionsAsked++;
+      if (session.state === STATES.SCREEN) {
+        session.questionsAsked++;
+        // The billing clock starts here, on the first question actually asked.
+        if (!session.firstQuestionAt) {
+          session.firstQuestionAt = new Date();
+          session.transcript?.record('interview.billing_start', {
+            questionsAsked: session.questionsAsked,
+          });
+        }
+      }
     }
 
     const toolUse = response.content.find(c => c.type === 'tool_use') ?? null;
@@ -353,6 +371,26 @@ TOOLS AVAILABLE TO YOU RIGHT NOW: ${this.tools.definitionsFor(session.state).map
       this.logger.warn({ sessionId: session.id, depth }, 'Tool chain limit reached');
       await speak("I'm sorry, something has gone wrong on my end. I'll flag this for the team and they'll be in touch by email.");
       await this.forceEscalate(session, 'other', 'tool chain limit reached');
+      return;
+    }
+
+    // She said goodbye without calling end_call. Nothing else will hang up the
+    // phone, so the candidate sits listening to silence until they give up, and
+    // the interview is then recorded as abandoned - unbilled, reported as a
+    // failed call. Ending here is safe because CANDIDATE_QA is only reached
+    // after finish_screening: the questions are already done, so the worst case
+    // is ending a beat early rather than cutting the screening short.
+    if (!toolUse && spoke && session.state === STATES.CANDIDATE_QA &&
+        response.stop_reason === 'end_turn' && CLOSING_REMARK.test(reply)) {
+      session.transcript?.record('interview.auto_close', {
+        reason: 'farewell_without_end_call',
+        questionsAsked: session.questionsAsked,
+      });
+      this.logger.info(
+        { sessionId: session.id, questions: session.questionsAsked },
+        'Closing the call on a spoken farewell'
+      );
+      session.finish(TERMINAL.COMPLETED);
       return;
     }
 

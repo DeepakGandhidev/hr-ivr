@@ -22,6 +22,74 @@ pratibha/
 └── package.json    # npm workspaces
 ```
 
+## Run it with Docker
+
+Everything in containers — Postgres, Supabase auth, the web app and the voice
+worker. Docker is the only thing you need installed.
+
+```bash
+git clone https://github.com/DeepakGandhidev/hr-ivr.git
+cd hr-ivr
+cp .env.docker.example .env.docker      # then add the model API key
+docker compose -f docker-compose.dev.yml up
+```
+
+First run takes a few minutes (image build, then GoTrue and Prisma migrations).
+When it settles:
+
+| | | |
+|---|---|---|
+| Web app | http://localhost:3000 | |
+| Worker | http://localhost:8091 | |
+| Supabase Studio | http://localhost:54323 | browse and query the database |
+| Mailpit | http://localhost:8025 | every email the app sends, caught locally |
+| Auth (GoTrue) | http://localhost:9999 | |
+| Postgres | `postgres://pratibha:pratibha@localhost:5432/pratibha` | |
+
+Supabase runs as containers here, not through the Supabase CLI, so nothing
+extra has to be installed. Only auth and the database are included: this app
+uses Supabase for sign-in and Prisma for everything else, so PostgREST, Storage
+and Realtime would be nine containers nobody calls. Studio's API-shaped tabs
+are therefore empty; its table editor and SQL editor are the point.
+
+Mail is never delivered locally. Invites, rejections and verification mail all
+land in Mailpit, so a dev machine cannot email a real candidate by accident.
+
+Migrations run automatically, in their own container, before either service
+starts — so neither ever comes up against a schema that does not exist yet.
+
+`.env.docker.example` ships with `MOCK_MODE=true`, which mocks speech and
+telephony: the conversation loop can be exercised with no Sarvam or Plivo
+credentials. **The one value worth filling in is `ANTHROPIC_API_KEY`**, without
+which CV screening and interviews cannot run. Ask Deepak for it — and note that
+`.env.docker` is gitignored, so never paste a key into `.env.docker.example`.
+
+Seed a demo tenant and login users once it is up:
+
+```bash
+docker compose -f docker-compose.dev.yml exec web npm run db:seed
+docker compose -f docker-compose.dev.yml exec web npm run db:mock
+```
+
+Source is bind-mounted and both services hot-reload, so an edit on your machine
+takes effect without rebuilding. Rebuild only when a dependency changes:
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+
+Useful:
+
+```bash
+docker compose -f docker-compose.dev.yml logs -f web worker   # follow logs
+docker compose -f docker-compose.dev.yml down                 # stop, keep data
+docker compose -f docker-compose.dev.yml down -v              # stop, WIPE the database
+```
+
+`down -v` deletes the Postgres volume. That is also the only way to re-run
+`docker/postgres-init.sql`, which sets up the restricted `pratibha_app` role
+and the `auth` schema — it runs once, on an empty data directory.
+
 ## Quick start
 
 1. Start Postgres and local Supabase:

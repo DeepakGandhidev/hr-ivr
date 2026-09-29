@@ -4,6 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import type { CandidateStatus } from "@pratibha/shared";
 import { CandidateStatusBadge, CandidateStatusPicker } from "@/components/CandidateStatus";
+import Markdown from "@/components/Markdown";
+import { recommendationChip, verdictLabel } from "@/components/JobShell";
+import { formatDate, formatDateTime } from "@/lib/format";
 
 /**
  * Everything about one candidate, on one screen.
@@ -191,12 +194,12 @@ export default function CandidatePage({ params }: { params: { tenant: string; id
                   <div>
                     <span className={`score${s.score >= 75 ? " hi" : ""}`} style={{ fontSize: 20 }}>{s.score}</span>
                     <span className={`pill ${s.verdict === "shortlist" ? "ok" : "mute"}`} style={{ marginLeft: 8 }}>
-                      {s.verdict}
+                      {verdictLabel(s.verdict)}
                     </span>
                   </div>
-                  <span className="subtle">{new Date(s.createdAt).toLocaleString()}</span>
+                  <span className="subtle">{formatDateTime(s.createdAt)}</span>
                 </div>
-                <p style={{ marginTop: 8 }}>{s.reasonSummary}</p>
+                <div style={{ marginTop: 8 }}><Markdown source={s.reasonSummary} className="md-tight" /></div>
                 <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginTop: 10 }}>
                   <div>
                     <div className="subtle" style={{ marginBottom: 6 }}>Matched</div>
@@ -232,7 +235,7 @@ export default function CandidatePage({ params }: { params: { tenant: string; id
               <tbody>
                 {candidate.interviewCalls.map((call) => (
                   <tr key={call.id}>
-                    <td>{new Date(call.startedAt).toLocaleString()}</td>
+                    <td>{formatDateTime(call.startedAt)}</td>
                     <td>{duration(call.startedAt, call.endedAt)}</td>
                     <td>{call.language ? LANGUAGES[call.language] ?? call.language : "—"}</td>
                     <td>
@@ -260,24 +263,24 @@ export default function CandidatePage({ params }: { params: { tenant: string; id
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="sec-h">
             <h2 style={{ margin: 0 }}>Interview report</h2>
-            <span className="subtle">{new Date(report.generatedAt).toLocaleString()}</span>
+            <span className="subtle">{formatDateTime(report.generatedAt)}</span>
           </div>
           <div className="row" style={{ gap: 14, alignItems: "baseline" }}>
             <span className="score hi" style={{ fontSize: 30 }}>{report.overallScore}</span>
-            <span className="pill gate">{report.recommendation.replace(/_/g, " ")}</span>
+            <span className="pill gate">{recommendationChip(report.recommendation).label}</span>
           </div>
 
           <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginTop: 14 }}>
             <div>
               <div className="subtle" style={{ marginBottom: 6 }}>Strengths</div>
               <ul style={{ paddingLeft: 18 }}>
-                {asArray(report.strengths).map((s) => <li key={s}>{s}</li>)}
+                {asArray(report.strengths).map((s) => <li key={s}><Markdown source={s} inline /></li>)}
               </ul>
             </div>
             <div>
               <div className="subtle" style={{ marginBottom: 6 }}>Concerns</div>
               <ul style={{ paddingLeft: 18 }}>
-                {asArray(report.concerns).map((c) => <li key={c}>{c}</li>)}
+                {asArray(report.concerns).map((c) => <li key={c}><Markdown source={c} inline /></li>)}
               </ul>
             </div>
           </div>
@@ -294,7 +297,7 @@ export default function CandidatePage({ params }: { params: { tenant: string; id
         <div className="feed">
           {timeline.map((e, i) => (
             <div className="ev" key={`${e.at}-${i}`}>
-              <time>{new Date(e.at).toLocaleDateString()}</time>
+              <time>{formatDate(e.at)}</time>
               <div><b>{e.title}</b> <span>· {e.detail}</span></div>
             </div>
           ))}
@@ -425,7 +428,7 @@ function Notes({
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                 <strong>{note.author.name ?? note.author.email}</strong>
                 <span className="subtle">
-                  {new Date(note.createdAt).toLocaleString()}
+                  {formatDateTime(note.createdAt)}
                   {note.updatedAt !== note.createdAt && " · edited"}
                 </span>
               </div>

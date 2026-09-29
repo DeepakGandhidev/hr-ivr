@@ -20,7 +20,53 @@ export async function GET(
       throw new ValidationError("jobId query parameter is required", query.error.flatten());
     }
 
+    // ?detail=1 is the Shortlist tab: every item with what its rows show
+    // (latest screening, invitation state, whether they were interviewed) and
+    // who approved. The plain list stays light for anything else.
+    const detail = searchParams.get("detail") === "1";
+
     return withTenantAuth(tenant, Action.shortlistRead, async (_ctx, tx) => {
+      if (detail) {
+        const shortlists = await tx.shortlist.findMany({
+          where: { jobId: query.data.jobId },
+          orderBy: { createdAt: "desc" },
+          include: {
+            _count: { select: { items: true } },
+            approvals: {
+              orderBy: { approvedAt: "desc" },
+              take: 1,
+              include: { approver: { select: { id: true, name: true, email: true } } },
+            },
+            items: {
+              orderBy: { createdAt: "asc" },
+              include: {
+                candidate: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    phoneE164: true,
+                    status: true,
+                    screenings: { orderBy: { createdAt: "desc" }, take: 1 },
+                    // Enough to say whether an invitation went out under an
+                    // approval. The email body itself is never selected.
+                    outreachEmails: {
+                      orderBy: { createdAt: "desc" },
+                      select: { id: true, sentAt: true, status: true, approvalId: true },
+                    },
+                    interviewCalls: {
+                      where: { assessmentReport: { isNot: null } },
+                      select: { id: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+        return { shortlists };
+      }
+
       const shortlists = await tx.shortlist.findMany({
         where: { jobId: query.data.jobId },
         orderBy: { createdAt: "desc" },

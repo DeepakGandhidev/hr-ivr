@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import MarkdownEditor from "@/components/MarkdownEditor";
+import Markdown, { markdownToPlain, truncateEnd } from "@/components/Markdown";
+import Time from "@/components/Time";
 
 interface JobVersion {
   id: string;
@@ -242,12 +244,11 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
                   <strong>v{d.version}</strong>
                   {i === 0 && <span className="badge badge-accent" style={{ marginLeft: 8 }}>current</span>}
                   <div className="subtle">
-                    {d.bodyMd.slice(0, 90).replace(/\s+/g, " ")}
-                    {d.bodyMd.length > 90 ? "…" : ""}
+                    {truncateEnd(markdownToPlain(d.bodyMd), 90)}
                   </div>
                 </div>
                 <div className="subtle" style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                  {new Date(d.createdAt).toLocaleDateString()}
+                  <Time value={d.createdAt} format="date" />
                   <br />
                   <button type="button" className="sm ghost" onClick={() => setViewingJd(d)}>
                     View
@@ -271,7 +272,7 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
             <div className="row" style={{ marginBottom: 10 }}>
               <strong>Description v{viewingJd.version}</strong>
               <span className="subtle" style={{ marginLeft: 8 }}>
-                {new Date(viewingJd.createdAt).toLocaleString()}
+                <Time value={viewingJd.createdAt} />
               </span>
               <button
                 className="ghost sm"
@@ -281,7 +282,7 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
                 Close
               </button>
             </div>
-            <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{viewingJd.bodyMd}</div>
+            <Markdown source={viewingJd.bodyMd} />
           </div>
         </div>
       )}
@@ -297,7 +298,7 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
                   {v.changeNote && <div className="subtle">{v.changeNote}</div>}
                 </div>
                 <div className="subtle" style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                  {new Date(v.createdAt).toLocaleDateString()}
+                  <Time value={v.createdAt} format="date" />
                   <br />
                   {v.author?.name || v.author?.email || "—"}
                 </div>

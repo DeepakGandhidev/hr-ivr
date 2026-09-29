@@ -48,6 +48,7 @@ export async function GET(
               status: true,
               startedAt: true,
               endedAt: true,
+              recordingRef: true,
               candidate: {
                 select: { id: true, name: true, email: true, phoneE164: true, status: true },
               },

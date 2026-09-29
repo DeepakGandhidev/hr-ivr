@@ -88,6 +88,21 @@ const SCHEMA = {
       recommendation_verdict: {
         type: 'string',
         description: 'A short, direct verdict consistent with recommendation_score.'
+      },
+      requirement_fit: {
+        type: 'array',
+        description:
+          'One entry per requirement listed under SCREENING CRITERIA, using its id: whether the candidate ' +
+          'meets it on the evidence of the CV and the call, and one sentence of that evidence.',
+        items: {
+          type: 'object',
+          properties: {
+            criterion_id: { type: 'integer' },
+            status: { type: 'string', enum: ['met', 'partly', 'not_met'] },
+            evidence: { type: 'string', description: 'One sentence, from the CV or what the candidate said.' }
+          },
+          required: ['criterion_id', 'status', 'evidence']
+        }
       }
     },
     required: [
@@ -99,6 +114,43 @@ const SCHEMA = {
 };
 
 const normalise = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+const FIT_STATUSES = ['met', 'partly', 'not_met'];
+
+/**
+ * Fit, requirement by requirement, checked against the job's own criteria.
+ *
+ * The requirement text comes from the job, not the model, so a report can only
+ * ever list requirements the role actually has. Entries for unknown ids, with
+ * an unknown status or with no evidence are dropped rather than shown. Older
+ * model output without the field yields an empty list, and the report falls
+ * back to jd_fit_summary.
+ */
+export function requirementFit(input, criteria) {
+  if (!Array.isArray(input)) return [];
+  const byId = new Map((criteria ?? []).map(c => [c.id, c]));
+  const seen = new Set();
+  const out = [];
+
+  for (const row of input) {
+    const criterion = byId.get(row?.criterion_id);
+    if (!criterion || seen.has(criterion.id)) continue;
+    if (!FIT_STATUSES.includes(row.status)) continue;
+    const evidence = String(row.evidence ?? '').replace(/\s+/g, ' ').trim();
+    if (!evidence) continue;
+
+    seen.add(criterion.id);
+    out.push({
+      criterionId: criterion.id,
+      requirement: criterion.criterion,
+      kind: criterion.weight >= 5 ? 'must' : 'good',
+      status: row.status,
+      evidence: evidence.length > 400 ? `${evidence.slice(0, 397)}…` : evidence,
+    });
+  }
+
+  return out.sort((a, b) => a.criterionId - b.criterionId);
+}
 
 /** A score the model may have omitted, fumbled or put out of range. */
 function clampScore(value) {
@@ -215,6 +267,9 @@ export class PostCallAnalyst {
           recommendationReasoning: assessment.recommendation_reasoning,
           credibilityNotes: assessment.credibility_notes,
           flags: assessment.flags,
+          // Per-requirement fit (J62). Kept in dimensions, so no schema change;
+          // jdFitSummary below stays as the fallback for reports without it.
+          requirementFit: assessment.requirement_fit,
         },
         strengths: assessment.strengths,
         concerns: assessment.gaps,
@@ -311,6 +366,7 @@ export class PostCallAnalyst {
       jd_fit_summary: input.jd_fit_summary ?? null,
       recommendation_score: clampScore(input.recommendation_score),
       recommendation_verdict: input.recommendation_verdict ?? null,
+      requirement_fit: requirementFit(input.requirement_fit, session.criteria),
 
       dropped_scores: rejected.length
     };

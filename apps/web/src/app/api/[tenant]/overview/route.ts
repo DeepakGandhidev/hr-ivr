@@ -8,6 +8,7 @@ import {
   interviewMinuteLimit,
   screeningLimit,
 } from "@/lib/billing";
+import { FUNNEL_WHERE } from "@/lib/job-insights";
 
 export const runtime = "nodejs";
 
@@ -156,7 +157,9 @@ export async function GET(
         // Screenings, shortlists and interview calls carry no tenant column of
         // their own; they inherit it through the candidate or job they belong
         // to, so the filter goes through the relation.
-        tx.screening.count({ where: { candidate: { tenantId }, verdict: "shortlist" } }),
+        // Candidates, not screening rows, so a re-screen does not count twice.
+        // Shared with the Jobs cards and the job hub so their numbers add up.
+        tx.candidate.count({ where: FUNNEL_WHERE.shortlisted({ tenantId }) }),
         tx.shortlist.findMany({
           where: { job: { tenantId } },
           select: {
@@ -167,7 +170,9 @@ export async function GET(
           },
           orderBy: { createdAt: "desc" },
         }),
-        tx.interviewCall.count({ where: { candidate: { tenantId }, status: "completed" } }),
+        // A call that produced a report: the bar the worker uses to mark a
+        // candidate interviewed, and what the Interviews tab lists.
+        tx.assessmentReport.count({ where: FUNNEL_WHERE.interviewed({ tenantId }) }),
         tx.emailConnection.findMany({
           where: { tenantId },
           select: {

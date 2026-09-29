@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { TenantNav } from "@/components/TenantNav";
+import "@/app/jobs-module.css";
 
 interface TenantLayoutProps {
   children: React.ReactNode;

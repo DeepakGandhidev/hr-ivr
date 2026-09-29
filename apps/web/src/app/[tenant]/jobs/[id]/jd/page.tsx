@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import MarkdownEditor from "@/components/MarkdownEditor";
+import { JobShellError, JobTabHeader, JobTabs, useJobSummary } from "@/components/JobShell";
+import Time from "@/components/Time";
 
 interface JobDescription {
   id: string;
@@ -13,9 +15,17 @@ interface JobDescription {
   createdAt: string;
 }
 
+const origin = (d: JobDescription) => (d.generatedBy === "ai" ? "AI drafted" : "written by hand");
+
+/**
+ * JD Studio: draft, save and approve versions of the job description.
+ *
+ * Reached from the hub's History link. The JD opens rendered, so nobody sees
+ * markdown syntax unless they choose to edit it.
+ */
 export default function JdStudioPage({ params }: { params: { tenant: string; id: string } }) {
-  const router = useRouter();
   const { tenant, id } = params;
+  const { summary, error: summaryError, refresh } = useJobSummary();
   const [versions, setVersions] = useState<JobDescription[]>([]);
   const [body, setBody] = useState("");
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
@@ -59,8 +69,8 @@ export default function JdStudioPage({ params }: { params: { tenant: string; id:
     setBody(draft.bodyMd);
     setVersions((prev) => [draft, ...prev]);
     setSelectedVersion(draft.version);
-    setMessage(`Generated draft version ${draft.version} — review, edit, then approve.`);
-    router.refresh();
+    setMessage(`Generated draft version ${draft.version}. Review it, edit if needed, then approve.`);
+    await refresh();
   }
 
   async function saveVersion() {
@@ -85,10 +95,11 @@ export default function JdStudioPage({ params }: { params: { tenant: string; id:
       return;
     }
     const saved: JobDescription = data.description;
-    setMessage(`Saved version ${saved.version}`);
+    setMessage(`Saved version ${saved.version}.`);
     setVersions((prev) => [saved, ...prev]);
     setSelectedVersion(saved.version);
-    router.refresh();
+    // A saved version flips a published role to "Live · edited".
+    await refresh();
   }
 
   async function approveLatest() {
@@ -101,107 +112,142 @@ export default function JdStudioPage({ params }: { params: { tenant: string; id:
       return;
     }
     const approved: JobDescription = data.description;
-    setMessage(`Approved version ${approved.version}`);
-    setVersions((prev) =>
-      prev.map((v) => (v.id === approved.id ? { ...v, approvedAt: approved.approvedAt } : v))
+    setMessage(
+      summary?.publish.state === "draft"
+        ? `Approved version ${approved.version}.`
+        : `Approved version ${approved.version}. Republish from the Publish tab to put it on your job page.`
     );
-    router.refresh();
+    setVersions((prev) => prev.map((v) => (v.id === approved.id ? { ...v, approvedAt: approved.approvedAt } : v)));
+    await refresh();
   }
+
+  if (summaryError) return <JobShellError />;
 
   const hasApproved = versions.some((v) => v.approvedAt);
   const pending = versions.filter((v) => !v.approvedAt);
+  const canEdit = summary?.permissions.canEdit ?? false;
+  const canApprove = summary?.permissions.canApproveJd ?? false;
 
   return (
-    <div style={{ maxWidth: 820 }}>
-      <div className="page-head">
-        <Link href={`/${tenant}/jobs/${id}`} className="subtle">&larr; Back to job</Link>
-        <h1 style={{ marginTop: 6 }}>JD Studio</h1>
-        <p className="muted">
-          Write or generate the description, save it as a version, then approve
-          it. Only an approved version can be published.
-        </p>
-      </div>
+    <div className="jm">
+      <JobTabHeader
+        title="JD Studio"
+        intro="Write or generate the description, save it as a version, then approve it. Only an approved version can be published."
+      />
+      <JobTabs active="studio" />
 
       {/* The three steps are not discoverable from three same-looking buttons,
           and a job cannot be published until the last one is done. */}
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div className="row" style={{ gap: 18 }}>
-          <span className={`badge ${versions.length > 0 ? "badge-success" : "badge-neutral"}`}>
-            1. Draft {versions.length > 0 ? "\u2713" : ""}
-          </span>
-          <span className={`badge ${hasApproved ? "badge-success" : "badge-neutral"}`}>
-            2. Approve {hasApproved ? "\u2713" : ""}
-          </span>
-          <span className="badge badge-neutral">3. Publish</span>
-          {hasApproved && (
-            <Link href={`/${tenant}/jobs/${id}/publish`} style={{ marginLeft: "auto" }}>
-              Go to publish &rarr;
+      <ol className="jd-steps" aria-label="Steps to publish">
+        <li className={versions.length > 0 ? "done" : undefined}>
+          1. Draft{versions.length > 0 && <span className="visually-hidden"> (done)</span>}
+        </li>
+        <li className={hasApproved ? "done" : undefined}>
+          2. Approve{hasApproved && <span className="visually-hidden"> (done)</span>}
+        </li>
+        <li>3. Publish</li>
+        {hasApproved && (
+          <li className="jd-steps-link">
+            <Link href={`/${tenant}/jobs/${id}/publish`} className="link-strong">
+              Go to publish <span aria-hidden="true">→</span>
             </Link>
+          </li>
+        )}
+      </ol>
+
+      {error && <div className="notice notice-error">{error}</div>}
+      {message && (
+        <div className="notice notice-success" role="status">
+          {message}
+        </div>
+      )}
+
+      <section className="jm-card stack">
+        <div>
+          <label htmlFor="jd-notes">Extra notes for the AI draft (optional)</label>
+          <input
+            id="jd-notes"
+            type="text"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="e.g. emphasise fintech domain, remote friendly"
+          />
+        </div>
+        <div>
+          <div className="field-label">
+            Job description{selectedVersion !== null ? ` · version ${selectedVersion}` : ""}
+          </div>
+          <MarkdownEditor
+            // Remount per version so each one opens on its rendered view.
+            key={selectedVersion ?? "new"}
+            value={body}
+            onChange={setBody}
+            rows={16}
+            label="Job description body"
+            initialPreview={Boolean(body.trim())}
+          />
+        </div>
+        <div className="jm-actions">
+          {canEdit && (
+            <>
+              <button type="button" onClick={generateJd} disabled={generating} className="btn-line">
+                {generating ? "Generating…" : "Generate with AI"}
+              </button>
+              <button type="button" onClick={saveVersion} disabled={loading || !body.trim()} className="btn-ink">
+                {loading ? "Saving…" : "Save new version"}
+              </button>
+            </>
+          )}
+          {canApprove && (
+            <button
+              type="button"
+              className="btn-line"
+              onClick={approveLatest}
+              disabled={pending.length === 0}
+              title={pending.length === 0 ? "Every saved version is already approved" : undefined}
+            >
+              {pending.length === 0 ? "Nothing pending to approve" : `Approve version ${pending[0].version}`}
+            </button>
           )}
         </div>
-      </div>
-      {error && <div className="notice notice-error" style={{ marginBottom: 16 }}>{error}</div>}
-      {message && <div className="notice notice-success" style={{ marginBottom: 16 }}>{message}</div>}
-      <div style={{ marginBottom: 16 }}>
-        <label htmlFor="jd-notes">Extra notes for the AI draft (optional)</label>
-        <input
-          id="jd-notes"
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder="e.g. emphasise fintech domain, remote-friendly"
-          
-        />
-      </div>
-      <div style={{ marginBottom: 16 }}>
-        <label htmlFor="jd-body">JD body (Markdown)</label>
-        <textarea
-          id="jd-body"
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={16}
-          style={{ fontFamily: "var(--mono)" }}
-        />
-      </div>
-      <div className="row" style={{ marginBottom: 24 }}>
-        <button onClick={generateJd} disabled={generating} className="primary">
-          {generating ? "Generating..." : "Generate with AI"}
-        </button>
-        <button onClick={saveVersion} disabled={loading || !body.trim()} className="primary">
-          {loading ? "Saving…" : "Save new version"}
-        </button>
-        <button
-          onClick={approveLatest}
-          disabled={pending.length === 0}
-          title={pending.length === 0 ? "Every saved version is already approved" : undefined}
-        >
-          {pending.length === 0
-            ? "Nothing pending to approve"
-            : `Approve version ${pending[0].version}`}
-        </button>
-      </div>
+      </section>
 
-      <h3>Version history</h3>
-      {versions.length === 0 ? (
-        <p className="muted">No versions yet. Generate one with AI, or write it above and save.</p>
-      ) : (
-        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-          {versions.map((v) => (
-            <li key={v.id} className="card" style={{ marginBottom: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
+      <section className="jm-card" id="history" aria-labelledby="history-title">
+        <h2 id="history-title" className="card-title">
+          Version history
+        </h2>
+        {versions.length === 0 ? (
+          <p className="muted">No versions yet. Generate one with AI, or write it above and save.</p>
+        ) : (
+          <ul className="version-list">
+            {versions.map((v) => (
+              <li key={v.id}>
                 <span>
-                  Version {v.version} <span className="subtle">· {v.generatedBy}</span>{" "}
-                  <span className={`badge ${v.approvedAt ? "badge-success" : "badge-warning"}`}>
-                    {v.approvedAt ? "approved" : "pending"}
+                  <strong>Version {v.version}</strong>{" "}
+                  <span className="muted">
+                    · {origin(v)} · <Time value={v.createdAt} />
                   </span>
                 </span>
-                <button className="sm" onClick={() => { setBody(v.bodyMd); setSelectedVersion(v.version); }}>
-                  Load
+                <span className={`chip sm ${v.approvedAt ? "chip-green" : "chip-amber"}`}>
+                  {v.approvedAt ? "Approved" : "Pending"}
+                </span>
+                <button
+                  type="button"
+                  className="btn-link"
+                  aria-label={`Load version ${v.version}`}
+                  aria-pressed={selectedVersion === v.version}
+                  onClick={() => {
+                    setBody(v.bodyMd);
+                    setSelectedVersion(v.version);
+                  }}
+                >
+                  {selectedVersion === v.version ? "Showing" : "Load"}
                 </button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }

@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
+import Dialog from "@/components/Dialog";
+import Markdown from "@/components/Markdown";
+import Time from "@/components/Time";
 
 interface Screening {
   score: number;
@@ -11,96 +13,94 @@ interface Screening {
   createdAt: string;
 }
 
+const asList = (v: unknown): string[] => (Array.isArray(v) ? v.map(String).filter(Boolean) : []);
+
 /**
  * The whole screening result for one candidate.
  *
  * Nothing here is truncated. The reason exists to be read — it is the argument
- * for or against someone — and the table it came from could only show it by
- * making every row a different height. So the table gets a fixed-height control
- * and the full text lives here, where there is room for it.
+ * for or against someone — and the table it came from shows only its first
+ * line, so the full text lives here, rendered rather than as raw markdown.
  */
 export default function ScreeningDetail({
   who,
   screening,
+  threshold = 70,
   onClose,
 }: {
   who: string;
   screening: Screening;
+  /** The job's screening threshold, which decides the score's colour. */
+  threshold?: number;
   onClose: () => void;
 }) {
-  // Escape closes it. A modal that can only be dismissed by finding the button
-  // is a modal people feel trapped by.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  const matched = screening.matchedMustHaves ?? [];
-  const gaps = screening.gaps ?? [];
+  const matched = asList(screening.matchedMustHaves);
+  const gaps = asList(screening.gaps);
+  const suggested = screening.verdict === "shortlist";
 
   return (
-    <div className="modal-backdrop" onClick={onClose} role="presentation">
-      <div
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Screening detail for ${who}`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="row" style={{ marginBottom: 4 }}>
-          <strong>{who}</strong>
-          <button className="ghost sm" style={{ marginLeft: "auto" }} onClick={onClose}>
-            Close
-          </button>
-        </div>
+    <Dialog title={`Screening for ${who}`} onClose={onClose}>
+      <div className="screening-head">
+        <span className={`chip ${screening.score >= threshold ? "chip-green" : "chip-amber"}`}>
+          Score {screening.score}
+        </span>
+        <span className={`chip ${suggested ? "chip-green" : "chip-neutral"}`}>
+          {suggested ? "Suggested" : "Not suggested"}
+        </span>
+        <span className="muted small">
+          Screened <Time value={screening.createdAt} />
+        </span>
+      </div>
 
-        <div className="row" style={{ gap: 10, alignItems: "center", marginBottom: 14 }}>
-          <span className={`score${screening.score >= 75 ? " hi" : ""}`}>{screening.score}</span>
-          <span className="badge badge-neutral">{screening.verdict}</span>
-          <span className="subtle">
-            Screened {new Date(screening.createdAt).toLocaleDateString()}
-          </span>
-        </div>
+      <section className="screening-section">
+        <h3 className="req-head">Reason</h3>
+        {screening.reasonSummary ? (
+          <Markdown source={screening.reasonSummary} />
+        ) : (
+          <p className="muted">No reason recorded.</p>
+        )}
+      </section>
 
-        <section style={{ marginBottom: 14 }}>
-          <div className="subtle" style={{ marginBottom: 4 }}>Reason</div>
-          {/* pre-wrap: the model writes paragraphs, and collapsing them into
-              one block loses the structure of its argument. */}
-          <p style={{ margin: 0, whiteSpace: "pre-wrap", lineHeight: 1.55 }}>
-            {screening.reasonSummary || "No reason recorded."}
-          </p>
+      <div className="req-cols">
+        <section>
+          <h3 className="req-head">Matched requirements</h3>
+          {matched.length ? (
+            <ul className="evidence">
+              {matched.map((m, i) => (
+                <li key={i}>
+                  <CheckIcon />
+                  <Markdown source={m} inline />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">None recorded.</p>
+          )}
         </section>
 
-        <div
-          className="grid"
-          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}
-        >
-          <section>
-            <div className="subtle" style={{ marginBottom: 4 }}>Matched requirements</div>
-            {matched.length ? (
-              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                {matched.map((m, i) => <li key={i}>{m}</li>)}
-              </ul>
-            ) : (
-              <p className="subtle" style={{ margin: 0 }}>None recorded.</p>
-            )}
-          </section>
-
-          <section>
-            <div className="subtle" style={{ marginBottom: 4 }}>Gaps</div>
-            {gaps.length ? (
-              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                {gaps.map((g, i) => <li key={i}>{g}</li>)}
-              </ul>
-            ) : (
-              <p className="subtle" style={{ margin: 0 }}>None recorded.</p>
-            )}
-          </section>
-        </div>
+        <section>
+          <h3 className="req-head">Gaps</h3>
+          {gaps.length ? (
+            <ul className="report-list">
+              {gaps.map((g, i) => (
+                <li key={i}>
+                  <Markdown source={g} inline />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">None recorded.</p>
+          )}
+        </section>
       </div>
-    </div>
+    </Dialog>
+  );
+}
+
+export function CheckIcon() {
+  return (
+    <svg className="check-icon" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+      <path d="M2.5 7.5 L5.5 10.5 L11.5 3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }

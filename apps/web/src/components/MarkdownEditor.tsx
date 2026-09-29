@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Markdown from "@/components/Markdown";
 
 /**
  * The JD body editor.
@@ -21,15 +22,18 @@ export default function MarkdownEditor({
   disabled,
   rows = 18,
   label,
+  initialPreview = false,
 }: {
   value: string;
   onChange: (next: string) => void;
   disabled?: boolean;
   rows?: number;
   label?: string;
+  /** Open on the rendered view, for screens where reading comes first. */
+  initialPreview?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
-  const [preview, setPreview] = useState(false);
+  const [preview, setPreview] = useState(initialPreview);
 
   /** Wrap the selection, or insert a placeholder when nothing is selected. */
   function wrap(before: string, after = before, placeholder = "text") {
@@ -77,17 +81,17 @@ export default function MarkdownEditor({
     <div className="md-editor">
       <div className="md-toolbar">
         <button type="button" className="sm ghost" disabled={disabled || preview}
-          onClick={() => wrap("**")} title="Bold"><strong>B</strong></button>
+          onClick={() => wrap("**")} title="Bold" aria-label="Bold"><strong>B</strong></button>
         <button type="button" className="sm ghost" disabled={disabled || preview}
-          onClick={() => wrap("_")} title="Italic"><em>I</em></button>
+          onClick={() => wrap("_")} title="Italic" aria-label="Italic"><em>I</em></button>
         <button type="button" className="sm ghost" disabled={disabled || preview}
-          onClick={() => prefixLines("## ")} title="Heading">H</button>
+          onClick={() => prefixLines("## ")} title="Heading" aria-label="Heading">H</button>
         <button type="button" className="sm ghost" disabled={disabled || preview}
-          onClick={() => prefixLines("- ")} title="Bullet list">• List</button>
+          onClick={() => prefixLines("- ")} title="Bullet list" aria-label="Bullet list">• List</button>
         <button type="button" className="sm ghost" disabled={disabled || preview}
-          onClick={() => prefixLines((i) => `${i + 1}. `)} title="Numbered list">1. List</button>
+          onClick={() => prefixLines((i) => `${i + 1}. `)} title="Numbered list" aria-label="Numbered list">1. List</button>
         <button type="button" className="sm ghost" disabled={disabled || preview}
-          onClick={() => wrap("[", "](https://)", "link text")} title="Link">Link</button>
+          onClick={() => wrap("[", "](https://)", "link text")} title="Link" aria-label="Link">Link</button>
 
         {/* A toggle rather than a second pane: side by side at this width would
             halve both, and the JD is the widest thing on the page. */}
@@ -102,7 +106,9 @@ export default function MarkdownEditor({
       </div>
 
       {preview ? (
-        <div className="md-preview">{renderMarkdown(value)}</div>
+        <div className="md-preview">
+          {value.trim() ? <Markdown source={value} /> : <p className="subtle">Nothing to preview yet.</p>}
+        </div>
       ) : (
         <textarea
           ref={ref}
@@ -116,89 +122,4 @@ export default function MarkdownEditor({
       )}
     </div>
   );
-}
-
-/**
- * A deliberately small markdown renderer for the preview.
- *
- * Returns React elements rather than an HTML string: the JD is editable by
- * anyone on the team, and handing user-authored text to dangerouslySetInnerHTML
- * would make the preview an XSS sink on a page admins use. Nothing here ever
- * interprets raw HTML, so the worst a hostile JD can do is look wrong.
- *
- * Supports what the toolbar writes — headings, bullet and numbered lists, bold,
- * italic and links. Anything else renders as its own literal text.
- */
-function renderMarkdown(src: string) {
-  const blocks: React.ReactNode[] = [];
-  const lines = src.split("\n");
-  let list: { ordered: boolean; items: string[] } | null = null;
-
-  const flushList = (key: string) => {
-    if (!list) return;
-    const items = list.items.map((item, i) => <li key={i}>{inline(item)}</li>);
-    blocks.push(list.ordered ? <ol key={key}>{items}</ol> : <ul key={key}>{items}</ul>);
-    list = null;
-  };
-
-  lines.forEach((line, i) => {
-    const heading = /^(#{1,4})\s+(.*)$/.exec(line);
-    const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
-    const numbered = /^\s*\d+\.\s+(.*)$/.exec(line);
-
-    if (bullet) {
-      if (list && list.ordered) flushList(`l${i}`);
-      list = list ?? { ordered: false, items: [] };
-      list.items.push(bullet[1]);
-      return;
-    }
-    if (numbered) {
-      if (list && !list.ordered) flushList(`l${i}`);
-      list = list ?? { ordered: true, items: [] };
-      list.items.push(numbered[1]);
-      return;
-    }
-
-    flushList(`l${i}`);
-
-    if (heading) {
-      const level = heading[1].length;
-      const Tag = (level <= 2 ? "h3" : "h4") as "h3" | "h4";
-      blocks.push(<Tag key={i}>{inline(heading[2])}</Tag>);
-      return;
-    }
-    if (line.trim()) blocks.push(<p key={i}>{inline(line)}</p>);
-  });
-
-  flushList("last");
-  return blocks.length ? blocks : <p className="subtle">Nothing to preview yet.</p>;
-}
-
-/** Bold, italic and links within one line. */
-function inline(text: string): React.ReactNode[] {
-  const out: React.ReactNode[] = [];
-  const pattern = /(\*\*([^*]+)\*\*)|(_([^_]+)_)|(\[([^\]]+)\]\(([^)]+)\))/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-
-  while ((m = pattern.exec(text))) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-
-    if (m[2]) out.push(<strong key={m.index}>{m[2]}</strong>);
-    else if (m[4]) out.push(<em key={m.index}>{m[4]}</em>);
-    else if (m[6]) {
-      // Only http(s). A `javascript:` href in a link the whole team can edit is
-      // the same XSS the renderer otherwise avoids.
-      const href = /^https?:\/\//i.test(m[7]) ? m[7] : undefined;
-      out.push(
-        href
-          ? <a key={m.index} href={href} target="_blank" rel="noopener noreferrer">{m[6]}</a>
-          : <span key={m.index}>{m[6]}</span>
-      );
-    }
-    last = pattern.lastIndex;
-  }
-
-  if (last < text.length) out.push(text.slice(last));
-  return out;
 }

@@ -66,16 +66,26 @@ describe("JD editing", () => {
  * reach for innerHTML.
  */
 describe("markdown preview safety", () => {
-  const raw = readFileSync(path.join(APP_ROOT, "src/components/MarkdownEditor.tsx"), "utf8");
-  // Comments stripped: the file explains at length why it avoids innerHTML,
+  // The preview renders through the shared Markdown component, which every
+  // screen showing a JD or report uses, so both files are checked.
+  const read = (p: string) => readFileSync(path.join(APP_ROOT, p), "utf8");
+  // Comments stripped: the files explain at length why they avoid innerHTML,
   // and matching that prose would fail the test for saying the right thing.
-  const editor = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const editor = strip(read("src/components/MarkdownEditor.tsx"));
+  const rendererRaw = read("src/components/Markdown.tsx");
+  const renderer = strip(rendererRaw);
 
   it("never uses dangerouslySetInnerHTML", () => {
     expect(editor).not.toContain("dangerouslySetInnerHTML");
+    expect(renderer).not.toContain("dangerouslySetInnerHTML");
   });
 
-  it("only allows http(s) links", () => {
-    expect(raw).toContain("/^https?:\\/\\//i.test(m[7])");
+  it("previews through the shared renderer", () => {
+    expect(editor).toContain('from "@/components/Markdown"');
+  });
+
+  it("only allows http(s) and mailto links", () => {
+    expect(rendererRaw).toContain("/^(https?:\\/\\/|mailto:)/i.test(m[11])");
   });
 });

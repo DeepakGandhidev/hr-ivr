@@ -45,6 +45,13 @@ export async function GET(
         include: {
           screenings: { orderBy: { createdAt: "desc" }, take: 1 },
           shortlistItems: { include: { shortlist: true } },
+          // Whether an interview report exists, so the row can open it.
+          interviewCalls: {
+            where: { assessmentReport: { isNot: null } },
+            orderBy: { startedAt: "desc" },
+            take: 1,
+            select: { id: true, assessmentReport: { select: { id: true } } },
+          },
         },
       });
 

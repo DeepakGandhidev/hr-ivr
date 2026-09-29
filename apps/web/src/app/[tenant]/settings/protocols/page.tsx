@@ -90,6 +90,12 @@ export default function ProtocolsPage({ params }: { params: { tenant: string } }
   const [jobs, setJobs] = useState<Job[]>([]);
   const [protocols, setProtocols] = useState<Protocol[]>([]);
   const [scope, setScope] = useState<string>(""); // "" = workspace default
+
+  // Deep link from a job's "Interview setup" card: /settings/protocols?job=<id>
+  useEffect(() => {
+    const job = new URLSearchParams(window.location.search).get("job");
+    if (job) setScope(job);
+  }, []);
   const [draft, setDraft] = useState<Protocol>(DEFAULTS);
   const [focusText, setFocusText] = useState("");
   const [companyName, setCompanyName] = useState("");
@@ -377,7 +383,7 @@ export default function ProtocolsPage({ params }: { params: { tenant: string } }
             <p className={hintCls}>
               {scope
                 ? "Overrides the workspace default for this job only."
-                : `Used by every job without its own settings.${overrides ? ` ${overrides} job(s) currently override it.` : ""}`}
+                : `Used by every job without its own settings.${overrides ? ` ${overrides} ${overrides === 1 ? "job currently overrides" : "jobs currently override"} it.` : ""}`}
             </p>
           </div>
         </div>

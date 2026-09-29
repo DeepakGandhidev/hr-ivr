@@ -429,7 +429,7 @@ export default function EmailSettingsPage({ params }: { params: { tenant: string
                       Signed in successfully.
                     </div>
                     <div className="mt-1.5 text-sm text-[var(--success)]">
-                      {test.messages} message(s) in {folder}.
+                      {test.messages} {test.messages === 1 ? "message" : "messages"} in {folder}.
                     </div>
                     {test.folders && test.folders.length > 0 && (
                       <div className="mt-2 text-xs text-[var(--text-muted)]">

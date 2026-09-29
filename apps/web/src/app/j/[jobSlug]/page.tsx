@@ -1,4 +1,6 @@
 import { adminPrisma } from "@pratibha/prisma";
+import Markdown from "@/components/Markdown";
+import "@/app/jobs-module.css";
 
 interface PageProps {
   params: { jobSlug: string };
@@ -32,6 +34,15 @@ export default async function CareersJobPage({ params }: PageProps) {
         orderBy: { version: "desc" },
         take: 1,
       },
+      // The version that was published. Publishing pins it here, so an edit
+      // approved afterwards waits for a republish instead of going public
+      // unannounced.
+      posts: {
+        where: { channel: "careers_page", status: "posted" },
+        orderBy: { postedAt: "desc" },
+        take: 1,
+        select: { externalRef: true },
+      },
     },
   });
 
@@ -43,7 +54,16 @@ export default async function CareersJobPage({ params }: PageProps) {
     );
   }
 
-  const jd = job.descriptions[0];
+  // Still approved-only: the pinned id is looked up under the same filter, so a
+  // stray reference can never surface an unapproved draft. Posts published
+  // before pinning existed carry no reference and keep the latest approved.
+  const pinnedId = job.posts[0]?.externalRef ?? null;
+  const pinned = pinnedId
+    ? await adminPrisma.jobDescription.findFirst({
+        where: { id: pinnedId, jobId: job.id, approvedAt: { not: null } },
+      })
+    : null;
+  const jd = pinned ?? job.descriptions[0];
 
   return (
     <main style={{ maxWidth: 720, margin: "48px auto", padding: 24 }}>
@@ -70,7 +90,7 @@ export default async function CareersJobPage({ params }: PageProps) {
       )}
       <hr style={{ border: 0, borderTop: "1px solid var(--border)", margin: "24px 0" }} />
       {jd ? (
-        <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit", lineHeight: 1.6 }}>{jd.bodyMd}</pre>
+        <Markdown source={jd.bodyMd} className="md-public" />
       ) : (
         <p>No job description available.</p>
       )}

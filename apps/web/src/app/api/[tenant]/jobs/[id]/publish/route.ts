@@ -35,6 +35,12 @@ export async function POST(
 
       await tx.job.update({ where: { id }, data: { status: "open" } });
 
+      // The version going public, pinned on the post. The careers page serves
+      // this version rather than whichever was approved most recently, so a JD
+      // edited after publishing stays off the public page until someone
+      // republishes — which is what "Live · edited" tells them.
+      const publishedVersion = job.descriptions[0];
+
       // Publishing twice must not stack up posts for the same channel: the
       // publish screen reads posts.find(channel) and would keep showing the
       // first, while the list below it filled with duplicates.
@@ -45,7 +51,12 @@ export async function POST(
       if (existing) {
         await tx.jobPost.update({
           where: { id: existing.id },
-          data: { status: "posted", postedAt: new Date(), includesPratibhaNumber: true },
+          data: {
+            status: "posted",
+            postedAt: new Date(),
+            includesPratibhaNumber: true,
+            externalRef: publishedVersion.id,
+          },
         });
       } else {
         await tx.jobPost.create({
@@ -55,6 +66,7 @@ export async function POST(
             status: "posted",
             postedAt: new Date(),
             includesPratibhaNumber: true,
+            externalRef: publishedVersion.id,
           },
         });
       }

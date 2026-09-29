@@ -24,6 +24,7 @@
     "db:mock:auth": "node scripts/seed-mock-auth.js",
     "test:isolation": "node scripts/check-isolation.mjs",
     "db:test-candidate": "node scripts/add-test-candidate.js",
+    "db:cleanup-jobs": "node scripts/cleanup-job-data.mjs",
     "db:reset-production": "node scripts/reset-production.mjs",
     "dev:up": "./scripts/dev-up.sh",
     "dev:down": "./scripts/dev-down.sh",

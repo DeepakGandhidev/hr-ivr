@@ -1,30 +1,30 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
+import Dialog from "@/components/Dialog";
+import { plural } from "@/lib/format";
 
 /**
- * Edit and archive, for one job.
+ * Archiving a job, with its confirmation.
  *
- * `canDelete` is resolved on the server and passed in, so the button does not
- * appear and then vanish once a role check lands. It is a display rule only —
- * the API enforces Action.jobDelete regardless of what this renders.
+ * A hook rather than a button, because Archive lives in the three-dot menu on
+ * job cards and on the job header: the menu item calls `request()` and the
+ * page renders `dialog`. Whether the menu offers Archive at all is a display
+ * rule only — the API enforces Action.jobDelete regardless.
  */
-export default function JobActions({
+export function useArchiveJob({
   tenant,
   jobId,
   title,
   candidateCount,
-  canDelete,
+  onArchived,
 }: {
   tenant: string;
   jobId: string;
   title: string;
   candidateCount: number;
-  canDelete: boolean;
+  onArchived: () => void;
 }) {
-  const router = useRouter();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,73 +40,42 @@ export default function JobActions({
         return;
       }
       setConfirming(false);
-      router.refresh();
-      router.push(`/${tenant}/jobs`);
+      onArchived();
     } finally {
       setBusy(false);
     }
   }
 
-  return (
-    <>
-      <div className="row" style={{ gap: 8 }}>
-        <Link
-          href={`/${tenant}/jobs/${jobId}/edit`}
-          className="btn"
-          onClick={(e) => e.stopPropagation()}
-        >
-          Edit
-        </Link>
-        {canDelete && (
-          <button
-            type="button"
-            className="btn"
-            onClick={(e) => {
-              // The jobs list wraps each card in a link; without this, asking to
-              // archive would navigate into the job instead.
-              e.preventDefault();
-              e.stopPropagation();
-              setConfirming(true);
-            }}
-          >
-            Archive
-          </button>
-        )}
-      </div>
-
-      {confirming && (
-        <div className="modal-backdrop" onClick={() => !busy && setConfirming(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ marginTop: 0 }}>Archive “{title}”?</h3>
-
-            {candidateCount > 0 ? (
-              <p>
-                This role has <strong>{candidateCount}</strong>{" "}
-                {candidateCount === 1 ? "candidate" : "candidates"} attached. Archiving hides
-                it from the portal and closes it to new applications.{" "}
-                <strong>Nothing is deleted</strong> — their CVs, screening scores, calls and
-                reports are all kept.
-              </p>
-            ) : (
-              <p>
-                Archiving hides this role from the portal and closes it to new applications.
-                Nothing is deleted.
-              </p>
-            )}
-
-            {error && <div className="notice notice-error">{error}</div>}
-
-            <div className="row" style={{ justifyContent: "flex-end", marginTop: 16 }}>
-              <button type="button" className="btn" disabled={busy} onClick={() => setConfirming(false)}>
-                Cancel
-              </button>
-              <button type="button" className="btn btn-primary" disabled={busy} onClick={archive}>
-                {busy ? "Archiving…" : "Archive job"}
-              </button>
-            </div>
-          </div>
-        </div>
+  const dialog = confirming ? (
+    <Dialog title={`Archive “${title}”?`} onClose={() => setConfirming(false)} busy={busy}>
+      {candidateCount > 0 ? (
+        <p>
+          This role has <strong>{plural(candidateCount, "candidate")}</strong> attached. Archiving hides it from
+          the portal and closes it to new applications. <strong>Nothing is deleted</strong> — their CVs,
+          screening scores, calls and reports are all kept.
+        </p>
+      ) : (
+        <p>Archiving hides this role from the portal and closes it to new applications. Nothing is deleted.</p>
       )}
-    </>
-  );
+
+      {error && <div className="notice notice-error">{error}</div>}
+
+      <div className="jm-dialog-actions">
+        <button type="button" className="btn-line" disabled={busy} onClick={() => setConfirming(false)}>
+          Cancel
+        </button>
+        <button type="button" className="btn-ink" disabled={busy} onClick={archive}>
+          {busy ? "Archiving…" : "Archive job"}
+        </button>
+      </div>
+    </Dialog>
+  ) : null;
+
+  return {
+    request: () => {
+      setError(null);
+      setConfirming(true);
+    },
+    dialog,
+  };
 }

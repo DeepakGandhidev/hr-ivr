@@ -5,6 +5,9 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
+  // tsconfig keeps JSX as-is for Next; tests that render components need it
+  // compiled.
+  esbuild: { jsx: "automatic" },
   test: {
     environment: "node",
     globals: true,

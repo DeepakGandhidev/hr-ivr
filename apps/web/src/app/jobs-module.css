@@ -299,7 +299,10 @@
   justify-content: flex-start;
 }
 .action-menu-item:hover, .action-menu-item:focus { background: var(--jm-head); outline: none; }
-.action-menu-item.danger { color: var(--jm-clay) !important; }
+/* The global button.danger is a solid red button; in a menu that made Archive
+   red on red. A danger item is a quiet row like the others, clay on hover. */
+.action-menu-item.danger { color: var(--jm-clay) !important; background: none; }
+.action-menu-item.danger:hover, .action-menu-item.danger:focus { background: var(--jm-clay-bg); }
 .action-menu-item[aria-disabled="true"] { color: var(--jm-muted) !important; cursor: not-allowed; }
 
 /* --- chips and strips ------------------------------------------------------ */

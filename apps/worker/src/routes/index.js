@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { streamXml, closedXml, busyXml, isWithinOperatingHours } from '../lib/plivoXml.js';
+import { streamXml, closedXml, busyXml, blockedXml, isWithinOperatingHours } from '../lib/plivoXml.js';
+import { checkBlockedNumber } from '../db/index.js';
 import { verifyV3Signature, publicUrlOf } from '../utils/plivoSignature.js';
 
 export function setupRoutes(app, { config, logger, calls }) {
@@ -21,7 +22,7 @@ export function setupRoutes(app, { config, logger, calls }) {
    * The answer URL. Everything that should stop a call before a single word is
    * spoken is decided here, where refusing is cheap and clean.
    */
-  router.post('/pratibha/answer', (req, res) => {
+  router.post('/pratibha/answer', async (req, res) => {
     if (!authentic(req)) {
       logger.warn({ from: req.body?.From }, 'Rejected webhook with a bad signature');
       return res.status(403).type('text/plain').send('invalid signature');
@@ -29,6 +30,18 @@ export function setupRoutes(app, { config, logger, calls }) {
 
     const callUUID = req.body?.CallUUID;
     const from = req.body?.From;
+
+    // A number blocked in the admin panel is refused first, at the line,
+    // before any stream exists. A failed check answers normally: a database
+    // hiccup must not silence real candidates.
+    try {
+      if (from && (await checkBlockedNumber(from))) {
+        logger.info({ callUUID, from }, 'Blocked number refused');
+        return res.type('text/xml').send(blockedXml());
+      }
+    } catch (err) {
+      logger.error({ err: err.message, callUUID }, 'Blocked-number check failed; answering normally');
+    }
 
     if (!isWithinOperatingHours(config.operatingHours)) {
       logger.info({ callUUID, from }, 'Call outside operating hours');

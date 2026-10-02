@@ -6,7 +6,9 @@ import {
   currentUsagePeriod,
   interviewLimit,
   interviewMinuteLimit,
+  plusTopUp,
   screeningLimit,
+  topUps,
 } from "@/lib/billing";
 import { FUNNEL_WHERE } from "@/lib/job-insights";
 
@@ -281,6 +283,9 @@ export async function GET(
         }),
       ]);
 
+      // Minutes and screenings granted or bought on top of the plan.
+      const extra = await topUps(tx, tenantId);
+
       return {
         jobs,
         mailboxes,
@@ -303,11 +308,11 @@ export async function GET(
           period: currentUsagePeriod(),
           // Minutes are the billed unit; the interview figures are descriptive.
           interviewMinutesUsed: meter?.interviewMinutesUsed ?? 0,
-          interviewMinuteLimit: interviewMinuteLimit(ctx.tenant),
+          interviewMinuteLimit: plusTopUp(interviewMinuteLimit(ctx.tenant), extra.minutes),
           interviewsUsed: meter?.interviewsUsed ?? 0,
           interviewLimit: interviewLimit(ctx.tenant),
           screeningsUsed: meter?.screeningsUsed ?? 0,
-          screeningLimit: screeningLimit(ctx.tenant),
+          screeningLimit: plusTopUp(screeningLimit(ctx.tenant), extra.screenings),
         },
         activity: buildActivity(todayScreenings, todayCalls, todayInvites),
         stats: {

@@ -1,8 +1,9 @@
 import { NextRequest } from "next/server";
-import { Action, PLANS } from "@pratibha/shared";
+import { Action } from "@pratibha/shared";
 import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
-import { subscriptionOverview, TOP_UP_PACKS } from "@/lib/subscription";
+import { planView, subscriptionOverview, topUpPacks } from "@/lib/subscription";
+import { currentPlans } from "@/lib/pricing";
 import { paymentProvider } from "@/lib/payments";
 
 export const runtime = "nodejs";
@@ -23,7 +24,7 @@ export async function GET(
     withTenantAuth(tenant, Action.billingRead, async (ctx, tx) => {
       const overview = await subscriptionOverview(tx, ctx.tenant);
 
-      const [methods, invoices, profile] = await Promise.all([
+      const [methods, invoices, profile, plans, packs] = await Promise.all([
         tx.paymentMethod.findMany({
           where: { subscriptionId: overview.subscription.id },
           orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
@@ -59,6 +60,9 @@ export async function GET(
           where: { tenantId: ctx.tenant.id },
           select: { legalName: true, billingAddress: true, billingState: true, gstin: true },
         }),
+        // What is on sale, as published in the admin panel.
+        currentPlans(tx, { publicOnly: true }),
+        topUpPacks(tx),
       ]);
 
       const provider = paymentProvider();
@@ -68,13 +72,10 @@ export async function GET(
         methods,
         invoices,
         billingDetails: profile,
-        topUpPacks: TOP_UP_PACKS,
-        plans: Object.values(PLANS).map((p) => ({
-          id: p.id,
-          name: p.name,
-          priceInr: p.priceInr,
-          limits: p.limits,
-        })),
+        topUpPacks: packs,
+        // Keyed by plan key: choosing one moves the workspace to that plan's
+        // newest published version.
+        plans: plans.map((p) => ({ ...planView(p), id: p.key })),
         // The UI says "no gateway configured" rather than offering a button
         // that cannot work.
         gateway: { name: provider.name, canCharge: provider.canCharge },

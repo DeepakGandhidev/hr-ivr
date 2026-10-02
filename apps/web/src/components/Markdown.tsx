@@ -15,11 +15,18 @@ import type { ReactNode } from "react";
  *
  * No hooks, so it works in server and client components alike.
  *
- * Supported: headings, paragraphs, bold, italics, bold-italics, inline code,
- * links, bullet and numbered lists (one level of nesting), dividers,
- * blockquotes, fenced code and simple pipe tables. Single newlines inside a
- * paragraph are kept as line breaks, because model output uses them for
- * "Location: …" style lines that would otherwise run together.
+ * Supported: headings (# and === underlines), paragraphs, bold, italics,
+ * bold-italics, strikethrough, inline code, links and <https://…> autolinks,
+ * bullet and numbered lists (one level of nesting), dividers, blockquotes,
+ * fenced code and simple pipe tables. Single newlines inside a paragraph are
+ * kept as line breaks, because model output uses them for "Location: …" style
+ * lines that would otherwise run together. Images show their alt text: a JD
+ * has no business loading third-party pixels into the portal.
+ *
+ * Stored text is not always clean markdown, and existing rows have to render
+ * too, so normalize() first undoes what the generators and earlier editors
+ * left behind: a whole JD wrapped in a ```markdown fence, <br> tags, and
+ * newlines stored as a literal backslash-n.
  */
 export default function Markdown({
   source,
@@ -31,7 +38,7 @@ export default function Markdown({
   /** Render inline only (no blocks), for one-line strings such as list items. */
   inline?: boolean;
 }) {
-  const text = String(source ?? "");
+  const text = normalize(source);
   if (inline) {
     return <span className={className}>{renderInline(stripBlockMarkers(text), "i")}</span>;
   }
@@ -39,15 +46,39 @@ export default function Markdown({
 }
 
 // ---------------------------------------------------------------------------
+// Normalizing stored text
+// ---------------------------------------------------------------------------
+
+/** A fence around the whole document, whatever its language tag. */
+const WHOLE_FENCE = /^(```|~~~)[^\n]*\n([\s\S]*?)\n?\1\s*$/;
+
+function normalize(source: string | null | undefined): string {
+  let text = String(source ?? "").replace(/\r\n?/g, "\n");
+  // Double-encoded JSON leaves "\n" as two characters. Only when there is no
+  // real newline at all, so a JD that merely mentions "\n" is left alone.
+  if (!text.includes("\n") && /\\n/.test(text)) text = text.replace(/\\r\\n|\\n/g, "\n");
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+  const whole = WHOLE_FENCE.exec(text.trim());
+  return whole ? whole[2] : text;
+}
+
+// ---------------------------------------------------------------------------
 // Blocks
 // ---------------------------------------------------------------------------
 
 const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
-const HEADING = /^\s{0,3}(#{1,6})\s*(.*?)\s*#*\s*$/;
+/** The === underline that makes the line above it a heading. */
+const SETEXT = /^\s{0,3}={2,}\s*$/;
+/**
+ * "# Title", or "##Title" with no space, which models do write. A single "#"
+ * needs the space: "#hiring #sales" at the foot of a JD is hashtags.
+ */
+const HEADING = /^\s{0,3}(#[ \t]+|#{2,6}[ \t]*)(.*?)\s*#*\s*$/;
+const HEADING_MARK = /^\s{0,3}(?:#[ \t]+|#{2,6}[ \t]*)/;
 const BULLET = /^(\s*)[-*+•]\s+(.*)$/;
 const NUMBERED = /^(\s*)(\d{1,3})[.)]\s+(.*)$/;
 const QUOTE = /^\s{0,3}>\s?(.*)$/;
-const FENCE = /^\s{0,3}(```|~~~)/;
+const FENCE = /^\s{0,3}(```|~~~)\s*([\w-]*)/;
 const TABLE_ROW = /^\s*\|.*\|\s*$/;
 const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 
@@ -71,18 +102,27 @@ function renderBlocks(src: string): ReactNode[] {
       continue;
     }
 
-    // Fenced code: everything to the closing fence, verbatim.
+    // Fenced code: everything to the closing fence, verbatim — unless the
+    // fence says it holds markdown, which is the model wrapping its own prose.
     if (FENCE.test(line)) {
-      const fence = FENCE.exec(line)![1];
+      const [, fence, lang] = FENCE.exec(line)!;
       const body: string[] = [];
       i++;
       while (i < lines.length && !lines[i].trim().startsWith(fence)) body.push(lines[i++]);
       i++;
-      out.push(<pre key={k()}><code>{body.join("\n")}</code></pre>);
+      if (/^(markdown|md)$/i.test(lang)) out.push(...renderBlocks(body.join("\n")));
+      else out.push(<pre key={k()}><code>{body.join("\n")}</code></pre>);
       continue;
     }
 
-    if (HR.test(line)) {
+    if (line.trim() && SETEXT.test(lines[i + 1] ?? "") && !startsBlock(line, undefined)) {
+      out.push(<h3 key={k()}>{renderInline(line.trim(), k())}</h3>);
+      i += 2;
+      continue;
+    }
+
+    // A divider, or an === underline with nothing above it to make a heading.
+    if (HR.test(line) || SETEXT.test(line)) {
       out.push(<hr key={k()} />);
       i++;
       continue;
@@ -90,7 +130,7 @@ function renderBlocks(src: string): ReactNode[] {
 
     const heading = HEADING.exec(line);
     if (heading && heading[2]) {
-      const level = heading[1].length;
+      const level = heading[1].trim().length;
       const Tag = (level <= 2 ? "h3" : level === 3 ? "h4" : "h5") as "h3" | "h4" | "h5";
       out.push(<Tag key={k()}>{renderInline(heading[2], k())}</Tag>);
       i++;
@@ -192,7 +232,7 @@ function renderBlocks(src: string): ReactNode[] {
     while (i < lines.length) {
       const l = lines[i];
       if (!l.trim()) break;
-      if (para.length > 0 && startsBlock(l, lines[i + 1])) break;
+      if (para.length > 0 && (startsBlock(l, lines[i + 1]) || SETEXT.test(lines[i + 1] ?? ""))) break;
       para.push(l.trim());
       i++;
     }
@@ -242,7 +282,7 @@ function splitRow(line: string): string[] {
  * at word boundaries, so snake_case identifiers and file names survive.
  */
 const INLINE =
-  /(`+)([^`]+?)\1|\*\*\*([^*\n]+?)\*\*\*|\*\*([^\n]+?)\*\*|__([^_\n]+?)__|(^|[^\w*])\*(?!\s)([^*\n]+?)\*(?![\w*])|(^|[^\w])_(?!\s)([^_\n]+?)_(?!\w)|\[([^\]\n]+)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)|\\([\\`*_{}[\]()#+\-.!|>~])/g;
+  /(`+)([^`]+?)\1|\*\*\*([^*\n]+?)\*\*\*|\*\*([^\n]+?)\*\*|__([^_\n]+?)__|(^|[^\w*])\*(?!\s)([^*\n]+?)\*(?![\w*])|(^|[^\w])_(?!\s)([^_\n]+?)_(?!\w)|\[([^\]\n]+)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)|\\([\\`*_{}[\]()#+\-.!|>~])|~~(?!\s)([^~\n]+?)~~|!\[([^\]\n]*)\]\([^)\n]*\)|<((?:https?:\/\/|mailto:)[^>\s]+)>/g;
 
 function renderInline(text: string, keyBase: string): ReactNode[] {
   const out: ReactNode[] = [];
@@ -254,9 +294,9 @@ function renderInline(text: string, keyBase: string): ReactNode[] {
 
   const pushText = (s: string) => {
     if (!s) return;
-    // Markers left unpaired by a malformed source (a stray "**" or "__") are
-    // syntax, not content; showing them is exactly the bug being fixed.
-    const cleaned = s.replace(/\*\*+|__+/g, "");
+    // Markers left unpaired by a malformed source (a stray "**", "__" or "~~")
+    // are syntax, not content; showing them is exactly the bug being fixed.
+    const cleaned = s.replace(/\*\*+|__+|~~+/g, "");
     if (cleaned) out.push(cleaned);
   };
 
@@ -290,6 +330,16 @@ function renderInline(text: string, keyBase: string): ReactNode[] {
       );
     } else if (m[12] !== undefined) {
       out.push(m[12]);
+    } else if (m[13] !== undefined) {
+      out.push(<del key={key()}>{renderInline(m[13], key())}</del>);
+    } else if (m[14] !== undefined) {
+      if (m[14].trim()) out.push(m[14].trim());
+    } else if (m[15] !== undefined) {
+      out.push(
+        <a key={key()} href={m[15]} target="_blank" rel="noopener noreferrer">
+          {m[15].replace(/^mailto:/i, "")}
+        </a>
+      );
     }
     last = re.lastIndex;
   }
@@ -303,7 +353,7 @@ function stripBlockMarkers(text: string): string {
   return text
     .replace(/\r\n?/g, "\n")
     .split("\n")
-    .map((l) => l.replace(/^\s{0,3}#{1,6}\s*/, "").replace(/^\s*(?:[-*+•]|\d{1,3}[.)])\s+/, "").replace(/^\s{0,3}>\s?/, ""))
+    .map((l) => l.replace(HEADING_MARK, "").replace(/^\s*(?:[-*+•]|\d{1,3}[.)])\s+/, "").replace(/^\s{0,3}>\s?/, ""))
     .filter((l) => !HR.test(l))
     .join(" ")
     .trim();
@@ -315,19 +365,21 @@ function stripBlockMarkers(text: string): string {
 
 /** The same text with the syntax removed: for previews, titles and copy. */
 export function markdownToPlain(src: string | null | undefined): string {
-  return String(src ?? "")
-    .replace(/\r\n?/g, "\n")
+  return normalize(src)
     .split("\n")
-    .filter((l) => !HR.test(l) && !TABLE_SEP.test(l))
+    .filter((l) => !HR.test(l) && !TABLE_SEP.test(l) && !SETEXT.test(l) && !/^\s{0,3}(```|~~~)[\w-]*\s*$/.test(l))
     .map((l) =>
       l
-        .replace(/^\s{0,3}#{1,6}\s*/, "")
+        .replace(HEADING_MARK, "")
         .replace(/^\s{0,3}>\s?/, "")
         .replace(/^\s*(?:[-*+•]|\d{1,3}[.)])\s+/, "")
         .replace(/^\s*\|/, "")
         .replace(/\|\s*$/, "")
         .replace(/\s*\|\s*/g, " · ")
+        .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
         .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+        .replace(/<((?:https?:\/\/|mailto:)[^>\s]+)>/gi, "$1")
+        .replace(/~~/g, "")
         .replace(/`+([^`]+)`+/g, "$1")
         .replace(/\*\*\*|\*\*|__/g, "")
         .replace(/(^|[^\w*])\*(?!\s)([^*\n]+?)\*(?![\w*])/g, "$1$2")

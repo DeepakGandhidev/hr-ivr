@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 // Subpath import, not the package barrel: this is a client component and the
 // barrel would bring zod into the browser bundle.
 import { MAX_CV_UPLOAD_FILES, planCvUploadBatches } from "@pratibha/shared/limits";
+import { noun, plural } from "@/lib/format";
 
 /**
  * Adding candidates to a job without waiting for the mailbox.
@@ -149,7 +150,9 @@ export default function AddCandidates({
     } catch (e) {
       setError(
         `${e instanceof Error ? e.message : "Upload failed"}` +
-          (collected.length ? ` ${collected.length} CV(s) were added before this.` : "")
+          (collected.length
+            ? ` ${plural(collected.length, "CV")} ${noun(collected.length, "was", "were")} added before this.`
+            : "")
       );
       // Whatever failed, the files that already landed must not be re-sent by a
       // retry, or the recruiter gets a second pass of merge results.
@@ -276,7 +279,7 @@ export default function AddCandidates({
           {files.length > 0 && (
             <div style={{ marginTop: 14 }}>
               <div className="row" style={{ marginBottom: 8 }}>
-                <span className="subtle">{files.length} file(s) ready</span>
+                <span className="subtle">{plural(files.length, "file")} ready</span>
                 <button className="ghost sm" onClick={() => setFiles([])} disabled={busy}>
                   Clear
                 </button>
@@ -455,8 +458,10 @@ function summarize(results: IngestResult[]): Summary {
 function describe(summary: Summary): string {
   const parts: string[] = [];
   if (summary.created) parts.push(`${summary.created} added`);
-  if (summary.merged) parts.push(`${summary.merged} merged into existing candidates`);
-  if (summary.unparsed) parts.push(`${summary.unparsed} need details filled in by hand`);
+  if (summary.merged) {
+    parts.push(`${summary.merged} merged into ${summary.merged === 1 ? "an existing candidate" : "existing candidates"}`);
+  }
+  if (summary.unparsed) parts.push(`${summary.unparsed} ${noun(summary.unparsed, "needs", "need")} details filled in by hand`);
   if (summary.failed) parts.push(`${summary.failed} could not be read`);
   return parts.length ? `${parts.join(", ")}.` : "Nothing to add.";
 }

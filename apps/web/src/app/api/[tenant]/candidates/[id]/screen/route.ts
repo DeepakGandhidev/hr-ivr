@@ -5,6 +5,7 @@ import { handleApi } from "@/lib/api-errors";
 import { assertScreeningQuota, currentUsagePeriod } from "@/lib/billing";
 import { runCvScreening } from "@/lib/screening";
 import { notifyCandidateShortlisted } from "@/lib/notifications";
+import { platformSettings } from "@/lib/platform-settings";
 
 /**
  * §5 Stage 5 — score one candidate against the job and place them on the draft
@@ -46,7 +47,7 @@ export async function POST(
       return {
         candidate,
         promptBody: promptTemplate.body,
-        threshold: candidate.job.screeningThreshold ?? undefined,
+        threshold: candidate.job.screeningThreshold ?? (await platformSettings()).suggestThreshold,
       };
     });
 

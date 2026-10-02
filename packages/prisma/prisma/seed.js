@@ -2,45 +2,63 @@ import { PrismaClient } from '../src/index.js';
 
 const prisma = new PrismaClient();
 
+/**
+ * The first version of each plan, for a fresh database. Pricing is published
+ * from the admin panel after that, so this only ever creates a plan that has
+ * no published version yet: re-running the seed never changes a price.
+ */
 const PLANS = [
   {
     id: 'starter',
+    key: 'starter',
+    slashedPriceInr: 9999,
     name: 'Starter',
     priceInr: 4999,
-    limits: { roles: 2, interviews: 15, screenings: 100 },
+    minutes: 150,
+    screenings: 100,
+    jobLimit: 2,
     features: {},
   },
   {
     id: 'growth',
+    key: 'growth',
+    slashedPriceInr: 25999,
     name: 'Growth',
     priceInr: 12999,
-    limits: { roles: 6, interviews: 60, screenings: 400 },
+    minutes: 600,
+    screenings: 400,
+    jobLimit: 6,
     features: { portalAutoPosting: true, protocolTuning: true },
   },
   {
     id: 'scale',
+    key: 'scale',
+    slashedPriceInr: 59999,
     name: 'Scale',
     priceInr: 29999,
-    limits: { roles: null, interviews: 200, screenings: 1500 },
+    minutes: 2000,
+    screenings: 1500,
+    jobLimit: null,
     features: { portalAutoPosting: true, protocolTuning: true, dedicatedDid: true, apiAccess: true },
   },
 ];
 
 async function main() {
   for (const plan of PLANS) {
-    await prisma.plan.upsert({
-      where: { name: plan.name },
-      update: {
-        priceInr: plan.priceInr,
-        limits: plan.limits,
-        features: plan.features,
-      },
-      create: {
-        id: plan.id,
-        name: plan.name,
-        priceInr: plan.priceInr,
-        limits: plan.limits,
-        features: plan.features,
+    const published = await prisma.plan.findFirst({ where: { key: plan.key, status: 'published' } });
+    if (published) continue;
+    await prisma.plan.create({
+      data: {
+        ...plan,
+        version: 1,
+        status: 'published',
+        publishedAt: new Date(),
+        limits: {
+          roles: plan.jobLimit,
+          interviews: Math.floor(plan.minutes / 10),
+          interviewMinutes: plan.minutes,
+          screenings: plan.screenings,
+        },
       },
     });
   }

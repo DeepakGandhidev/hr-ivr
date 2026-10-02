@@ -25,7 +25,9 @@ export interface ActionMenuItem {
  *
  * The menu is positioned with `fixed` from the trigger's rect rather than
  * absolutely inside its row, because tables sit in scrolling containers that
- * would clip it.
+ * would clip it. A fixed element cannot be scrolled into view, so when there
+ * is no room below the trigger — the last card or row on screen — it opens
+ * upwards instead of out of sight.
  */
 export default function ActionMenu({
   label,
@@ -47,34 +49,62 @@ export default function ActionMenu({
     if (refocus) trigger.current?.focus();
   }, []);
 
+  // Runs once the menu is in the DOM (rendered hidden), so its height is known.
   const place = useCallback(() => {
     const r = trigger.current?.getBoundingClientRect();
     if (!r) return;
-    setPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
+    const height = menu.current?.offsetHeight ?? 0;
+    const below = r.bottom + 6;
+    const above = r.top - 6 - height;
+    const fitsBelow = below + height <= window.innerHeight - 8;
+    setPos({ top: fitsBelow || above < 8 ? below : above, right: Math.max(8, window.innerWidth - r.right) });
   }, []);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setPos(null);
+      return;
+    }
     place();
-    // Focus the first enabled item, as a menu button is expected to.
-    requestAnimationFrame(() => {
-      menu.current?.querySelector<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])')?.focus();
-    });
 
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (!menu.current?.contains(t) && !trigger.current?.contains(t)) close(false);
     };
-    const onScroll = () => close(false);
+    // Follow the trigger rather than closing on any scroll: a scroll still
+    // settling from a trackpad flick when the click lands would otherwise shut
+    // the menu the instant it opened. It closes once the trigger is off screen.
+    const onScroll = () => {
+      const r = trigger.current?.getBoundingClientRect();
+      if (!r || r.bottom < 0 || r.top > window.innerHeight) close(false);
+      else place();
+    };
     document.addEventListener("mousedown", onDown);
-    window.addEventListener("resize", onScroll);
+    window.addEventListener("resize", place);
     window.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("resize", onScroll);
+      window.removeEventListener("resize", place);
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [open, place, close]);
+
+  // Focus the first enabled item, as a menu button is expected to — once it is
+  // placed and visible (a hidden element cannot take focus), and once per
+  // opening, not again each time a scroll moves it. preventScroll, because
+  // the browser would otherwise scroll to the item.
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      focused.current = false;
+      return;
+    }
+    if (!pos || focused.current) return;
+    focused.current = true;
+    menu.current
+      ?.querySelector<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])')
+      ?.focus({ preventScroll: true });
+  }, [open, pos]);
 
   function onKeyDown(e: React.KeyboardEvent) {
     const nodes = Array.from(
@@ -131,14 +161,15 @@ export default function ActionMenu({
         </svg>
       </button>
 
-      {open && pos && (
+      {open && (
         <div
           ref={menu}
           id={menuId}
           role="menu"
           aria-label={label}
           className="action-menu"
-          style={{ top: pos.top, right: pos.right }}
+          // Hidden until measured and placed, so it never flashes in the wrong spot.
+          style={pos ? { top: pos.top, right: pos.right } : { top: 0, right: 0, visibility: "hidden" }}
           onKeyDown={onKeyDown}
           onClick={(e) => e.stopPropagation()}
         >

@@ -6,8 +6,11 @@ import { formatInr } from "@pratibha/shared";
 
 interface Plan {
   id: string;
+  key?: string;
   name: string;
   priceInr: number;
+  /** Display only: shown struck through. The sale price is the only one ever charged. */
+  slashedPriceInr?: number | null;
   limits: { roles: number | null; interviews: number; interviewMinutes: number; screenings: number };
 }
 
@@ -38,7 +41,7 @@ interface Payload {
   methods: Array<{ id: string; provider: string; brand: string | null; last4: string | null; mandateStatus: string; isDefault: boolean }>;
   invoices: Array<{ id: string; number: string; status: string; issuedAt: string; totalPaise: number }>;
   billingDetails: { legalName: string | null; billingAddress: string | null; billingState: string | null; gstin: string | null } | null;
-  topUpPacks: Array<{ minutes: number; pricePaise: number }>;
+  topUpPacks: Array<{ id: string; kind: "minutes" | "screenings"; quantity: number; minutes: number; pricePaise: number }>;
   gateway: { name: string; canCharge: boolean };
   canManage: boolean;
 }
@@ -183,11 +186,18 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
         <h3 style={{ marginTop: 0 }}>Plan</h3>
         <div className="plan-grid">
           {data.plans.map((plan) => {
-            const current = plan.id === subscription.planId;
+            // Plans on sale are keyed by plan; the workspace may be on an older,
+            // grandfathered version of the same one.
+            const current = plan.id === (data.plan?.key ?? subscription.planId);
             return (
               <div key={plan.id} className={`plan-card${current ? " current" : ""}`}>
                 <div className="plan-name">{plan.name}</div>
-                <div className="plan-price">₹{plan.priceInr.toLocaleString("en-IN")}<span>/mo</span></div>
+                <div className="plan-price">
+                  {plan.slashedPriceInr ? (
+                    <s style={{ opacity: 0.55, fontWeight: 500, marginRight: 6 }}>₹{plan.slashedPriceInr.toLocaleString("en-IN")}</s>
+                  ) : null}
+                  ₹{plan.priceInr.toLocaleString("en-IN")}<span>/mo</span>
+                </div>
                 <ul className="plan-limits">
                   <li>{plan.limits.interviewMinutes} interview minutes</li>
                   <li>{plan.limits.screenings} CV screenings</li>
@@ -300,18 +310,18 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
         <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
           {data.topUpPacks.map((pack) => (
             <button
-              key={pack.minutes}
+              key={pack.id}
               className="btn"
               disabled={!data.canManage || busy}
               onClick={() =>
                 act(`/api/${tenant}/subscription/top-up`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ minutes: pack.minutes }),
+                  body: JSON.stringify({ packId: pack.id }),
                 })
               }
             >
-              {pack.minutes} minutes — {formatInr(pack.pricePaise)}
+              {pack.quantity} {pack.kind === "minutes" ? "minutes" : "CV screenings"} — {formatInr(pack.pricePaise)}
             </button>
           ))}
         </div>

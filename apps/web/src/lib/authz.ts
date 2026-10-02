@@ -1,11 +1,31 @@
 import { createClient } from "@/lib/supabase/server";
 import { adminPrisma, withTenant } from "@pratibha/prisma";
-import { Action, can, ForbiddenError, logAuthzDenial, TenantMismatchError, UnauthorizedError, UserRole } from "@pratibha/shared";
-import type { User, Tenant, PrismaClient } from "@pratibha/prisma";
+import { Action, AppError, can, ForbiddenError, logAuthzDenial, TenantMismatchError, UnauthorizedError, UserRole } from "@pratibha/shared";
+import type { User, Tenant, Plan, TrialConfig, PrismaClient } from "@pratibha/prisma";
+import { currentTrial } from "@/lib/pricing";
+
+/**
+ * The workspace, with the exact plan version it is on (a price change
+ * grandfathers, so this is not necessarily the newest version) and, while on
+ * trial, the live trial allowances.
+ */
+export type TenantWithPlan = Tenant & { plan: Plan; trial: TrialConfig | null };
 
 export interface RequestContext {
   user: User;
-  tenant: Tenant;
+  tenant: TenantWithPlan;
+}
+
+/** Statuses in which nobody may use the workspace: suspended, or held for deletion. */
+export const PAUSED_STATUSES = ["suspended", "deleted_pending", "deleted"] as const;
+
+/** Copy string, verbatim: the notice members see while their workspace is paused. */
+export const WORKSPACE_PAUSED_NOTICE = "This workspace is paused. Write to start@pratibha.tech to resolve it.";
+
+export class WorkspacePausedError extends AppError {
+  constructor() {
+    super("WORKSPACE_PAUSED", WORKSPACE_PAUSED_NOTICE, 423);
+  }
 }
 
 export async function getSessionUser() {
@@ -30,8 +50,8 @@ export async function loadTenantContext(tenantSlug: string): Promise<RequestCont
   // context, so these two reads deliberately use the unfiltered client. The
   // tenant match is enforced immediately below, and every subsequent query runs
   // through withTenant() under RLS.
-  const tenant = await adminPrisma.tenant.findUnique({ where: { slug: tenantSlug } });
-  if (!tenant) {
+  const found = await adminPrisma.tenant.findUnique({ where: { slug: tenantSlug }, include: { plan: true } });
+  if (!found) {
     throw new ForbiddenError("Unknown tenant");
   }
 
@@ -39,11 +59,18 @@ export async function loadTenantContext(tenantSlug: string): Promise<RequestCont
     where: { authProviderId: authUserId },
   });
 
-  if (!user || user.tenantId !== tenant.id) {
+  if (!user || user.tenantId !== found.id || user.removedAt) {
     throw new TenantMismatchError();
   }
 
-  return { user, tenant };
+  // Suspension pauses sign ins: every request from a member stops here, after
+  // the membership check so the notice is only ever shown to members.
+  if ((PAUSED_STATUSES as readonly string[]).includes(found.status)) {
+    throw new WorkspacePausedError();
+  }
+
+  const trial = found.status === "trial" ? await currentTrial() : null;
+  return { user, tenant: { ...found, trial } };
 }
 
 export function requireAction(ctx: RequestContext, action: Action): RequestContext {

@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminPrisma } from "@pratibha/prisma";
 import { createClient } from "@/lib/supabase/server";
-import { createTenantSchema, PLANS, TRIAL_DAYS, ValidationError } from "@pratibha/shared";
+import {
+  createTenantSchema,
+  DEFAULT_OUTREACH_TEMPLATES,
+  DEFAULT_PROTOCOL_INSTRUCTION,
+  PLANS,
+  ValidationError,
+} from "@pratibha/shared";
+import { currentPlan, currentTrial, trialAllowance } from "@/lib/pricing";
 import { handleApi } from "@/lib/api-errors";
 
 export async function POST(request: NextRequest) {
@@ -47,8 +54,11 @@ export async function POST(request: NextRequest) {
       throw new Error("Supabase did not return a user after signup");
     }
 
+    // New signups take what is published now: the newest Starter version and
+    // the live trial's length.
+    const [starter, trial] = await Promise.all([currentPlan("starter"), currentTrial()]);
     const trialEndsAt = new Date();
-    trialEndsAt.setDate(trialEndsAt.getDate() + TRIAL_DAYS);
+    trialEndsAt.setDate(trialEndsAt.getDate() + trialAllowance(trial).days);
 
     try {
       const result = await adminPrisma.$transaction(async (tx) => {
@@ -56,7 +66,7 @@ export async function POST(request: NextRequest) {
           data: {
             name,
             slug,
-            planId: PLANS.starter.id,
+            planId: starter?.id ?? PLANS.starter.id,
             status: "trial",
             trialEndsAt,
           },
@@ -73,62 +83,14 @@ export async function POST(request: NextRequest) {
         });
 
         await tx.outreachTemplate.createMany({
-          data: [
-            {
-              tenantId: tenant.id,
-              type: "interview_invite",
-              subject: "Interview invite from {{companyName}} for {{jobTitle}}",
-              bodyMd: `Hi {{candidateName}},
-
-Thank you for applying for {{jobTitle}} at {{companyName}}.
-
-We would like to invite you for a first-round screening interview with Pratibha, our AI hiring assistant.
-
-Please call {{pratibhaNumber}} and use reference code {{referenceCode}} when prompted.
-
-Best regards,
-{{companyName}} Hiring Team`,
-              isDefault: true,
-            },
-            {
-              tenantId: tenant.id,
-              type: "rejection",
-              subject: "Update on your application for {{jobTitle}}",
-              bodyMd: `Hi {{candidateName}},
-
-Thank you for your interest in {{jobTitle}} at {{companyName}}.
-
-After careful review, we have decided not to move forward with your application at this time.
-
-We wish you the best in your search.
-
-Best regards,
-{{companyName}} Hiring Team`,
-              isDefault: true,
-            },
-            {
-              tenantId: tenant.id,
-              type: "reminder",
-              subject: "Reminder: Your Pratibha interview for {{jobTitle}}",
-              bodyMd: `Hi {{candidateName}},
-
-This is a friendly reminder to complete your Pratibha screening interview for {{jobTitle}} at {{companyName}}.
-
-Call {{pratibhaNumber}} and use reference code {{referenceCode}}.
-
-Best regards,
-{{companyName}} Hiring Team`,
-              isDefault: true,
-            },
-          ],
+          data: DEFAULT_OUTREACH_TEMPLATES.map((t) => ({ ...t, tenantId: tenant.id, isDefault: true })),
         });
 
         await tx.interviewProtocol.create({
           data: {
             tenantId: tenant.id,
             jobId: null,
-            instructionText:
-              "Be warm and concise. Ask one question at a time. Do not discuss salary, joining dates, or other candidates. If asked something you cannot answer, say the team will follow up.",
+            instructionText: DEFAULT_PROTOCOL_INSTRUCTION,
             version: 1,
           },
         });

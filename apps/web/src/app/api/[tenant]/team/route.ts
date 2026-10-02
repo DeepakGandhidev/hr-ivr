@@ -18,6 +18,9 @@ export async function GET(
   return handleApi(() =>
     withTenantAuth(tenant, Action.teamManage, async (_ctx, tx) => {
       const users = await tx.user.findMany({
+        // Members an admin removed keep their row (their jobs and notes point
+        // at it) but are no longer part of the team.
+        where: { removedAt: null },
         orderBy: { createdAt: "desc" },
         select: { id: true, email: true, name: true, role: true, createdAt: true },
       });

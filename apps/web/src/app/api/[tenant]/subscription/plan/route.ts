@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Action, PLANS, ValidationError, writeAuditLog } from "@pratibha/shared";
+import { Action, ValidationError, writeAuditLog } from "@pratibha/shared";
 import { authorizeTenant } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { getOrCreateSubscription, planComparison } from "@/lib/subscription";
 import { currentUsagePeriod } from "@/lib/billing";
+import { currentPlan } from "@/lib/pricing";
 import { z } from "zod";
 
 export const runtime = "nodejs";
 
 const planSchema = z.object({
-  planId: z.enum(Object.keys(PLANS) as [string, ...string[]]),
+  /** The plan to move to, by key (starter, growth, scale). It lands on that plan's newest published version. */
+  planId: z.string().min(1),
   /** Preview the change without making it. */
   preview: z.boolean().optional(),
 });
@@ -48,7 +50,13 @@ export async function POST(
       });
       const minutesUsed = meter?.interviewMinutesUsed ?? 0;
 
-      const comparison = planComparison(subscription.planId, parsed.data.planId, minutesUsed);
+      // By key, onto the newest published version: a plan change takes today's
+      // price, which is how a grandfathered workspace leaves its old one.
+      const asRow = await db.plan.findUnique({ where: { id: parsed.data.planId } });
+      const target = await currentPlan(asRow?.key ?? parsed.data.planId, db);
+      if (!target || target.visibility !== "public") throw new ValidationError("Unknown plan");
+
+      const comparison = planComparison(ctx.tenant.plan, target, minutesUsed);
       if (!comparison) throw new ValidationError("Unknown plan");
 
       // A preview changes nothing. The page uses it to show what a downgrade
@@ -57,13 +65,13 @@ export async function POST(
         return NextResponse.json({ preview: comparison });
       }
 
-      if (subscription.planId === parsed.data.planId) {
+      if (ctx.tenant.planId === target.id) {
         throw new ValidationError("You are already on that plan.");
       }
 
       const updated = await db.subscription.update({
         where: { id: subscription.id },
-        data: { planId: parsed.data.planId },
+        data: { planId: target.id },
       });
 
       // Tenant.planId is what every quota check reads, so both move together.
@@ -71,7 +79,7 @@ export async function POST(
       // limits enforced another.
       await db.tenant.update({
         where: { id: ctx.tenant.id },
-        data: { planId: parsed.data.planId },
+        data: { planId: target.id },
       });
 
       await writeAuditLog(db, {
@@ -80,8 +88,8 @@ export async function POST(
         action: "subscription.plan_changed",
         entity: "subscription",
         entityId: subscription.id,
-        before: { planId: subscription.planId },
-        after: { planId: parsed.data.planId, direction: comparison.direction },
+        before: { planId: ctx.tenant.planId, plan: ctx.tenant.plan?.name, priceInr: ctx.tenant.plan?.priceInr },
+        after: { planId: target.id, plan: target.name, priceInr: target.priceInr, direction: comparison.direction },
         reason: comparison.alreadyOverTarget
           ? `Already used ${minutesUsed} minutes this period, above the new plan's allowance`
           : undefined,

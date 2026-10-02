@@ -10,6 +10,7 @@ import {
   publishInputsForJobs,
   scoreThresholdOf,
 } from "@/lib/job-insights";
+import { platformSettings } from "@/lib/platform-settings";
 
 /**
  * Everything the job hub and its tab bar show, in one request: the header's
@@ -45,7 +46,7 @@ export async function GET(
       });
       if (!job) throw new NotFoundError("Job not found");
 
-      const [counts, publish, interview, config, jd, versionCount] = await Promise.all([
+      const [counts, publish, interview, config, jd, versionCount, settings] = await Promise.all([
         countsForJobs(tx, [id]),
         publishInputsForJobs(tx, [job]),
         interviewSetupFor(tx, ctx.tenant.id, id),
@@ -56,6 +57,7 @@ export async function GET(
           select: { id: true, version: true, bodyMd: true, generatedBy: true, approvedAt: true, createdAt: true },
         }),
         tx.jobDescription.count({ where: { jobId: id } }),
+        platformSettings(),
       ]);
 
       const c = counts.get(id)!;
@@ -71,7 +73,7 @@ export async function GET(
         jd,
         jdVersionCount: versionCount,
         config: {
-          scoreThreshold: scoreThresholdOf(job),
+          scoreThreshold: scoreThresholdOf(job, settings.suggestThreshold),
           scoreGapThreshold: config.scoreGapThreshold,
           portalPosts: config.portalPosts,
         },

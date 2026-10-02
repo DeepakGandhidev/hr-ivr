@@ -1,58 +1,71 @@
 import {
-  PLANS,
-  TRIAL_LIMITS,
   QuotaExceededError,
   quotaState,
   approximateInterviews,
 } from "@pratibha/shared";
-import type { Tenant } from "@pratibha/prisma";
-import type { TenantTransactionClient } from "@/lib/authz";
+import type { TenantTransactionClient, TenantWithPlan } from "@/lib/authz";
+import { planAllowance, trialAllowance } from "@/lib/pricing";
 
+/**
+ * Limits come from the workspace's own plan version (a published price change
+ * grandfathers it) or, on trial, from the live trial. Both are rows the admin
+ * panel publishes; nothing here is a constant any more.
+ */
+type PricedTenant = Pick<TenantWithPlan, "status" | "planId"> & {
+  plan?: TenantWithPlan["plan"] | null;
+  trial?: TenantWithPlan["trial"];
+};
 
 export function currentUsagePeriod(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
-export function activeJobLimit(tenant: Tenant): number | null {
+function allowance(tenant: PricedTenant) {
   if (tenant.status === "trial") {
-    return TRIAL_LIMITS.jobs;
+    const t = trialAllowance(tenant.trial ?? null);
+    return { jobs: t.jobs, screenings: t.screenings, minutes: t.minutes };
   }
-  const plan = PLANS[tenant.planId as keyof typeof PLANS];
-  if (!plan) return null;
-  return plan.limits.roles;
+  return planAllowance(tenant.plan, tenant.planId);
 }
 
-export function screeningLimit(tenant: Tenant): number | null {
-  if (tenant.status === "trial") {
-    return TRIAL_LIMITS.screenings;
-  }
-  const plan = PLANS[tenant.planId as keyof typeof PLANS];
-  if (!plan) return null;
-  return plan.limits.screenings;
+export function activeJobLimit(tenant: PricedTenant): number | null {
+  return allowance(tenant)?.jobs ?? null;
+}
+
+export function screeningLimit(tenant: PricedTenant): number | null {
+  return allowance(tenant)?.screenings ?? null;
 }
 
 /**
  * Retained only to describe a plan in the terms customers think in. Pricing is
  * per minute — this is not a quota and nothing is enforced against it.
  */
-export function interviewLimit(tenant: Tenant): number | null {
-  if (tenant.status === "trial") {
-    return TRIAL_LIMITS.interviews;
-  }
-  const plan = PLANS[tenant.planId as keyof typeof PLANS];
-  if (!plan) return null;
-  return plan.limits.interviews;
+export function interviewLimit(tenant: PricedTenant): number | null {
+  const minutes = allowance(tenant)?.minutes;
+  return minutes == null ? null : approximateInterviews(minutes);
 }
 
-/** The quota that is actually enforced and billed. */
-export function interviewMinuteLimit(tenant: Tenant): number | null {
-  if (tenant.status === "trial") {
-    return TRIAL_LIMITS.interviewMinutes;
-  }
-  const plan = PLANS[tenant.planId as keyof typeof PLANS];
-  if (!plan) return null;
-  return plan.limits.interviewMinutes;
+/** The plan's minute allowance, before anything bought or granted on top. */
+export function interviewMinuteLimit(tenant: PricedTenant): number | null {
+  return allowance(tenant)?.minutes ?? null;
+}
+
+/**
+ * Minutes and screenings bought or granted on top of the plan this period.
+ * Granted by the admin panel or bought from the Subscription page, they extend
+ * the ceiling rather than being a second balance, so "left" means what it says.
+ */
+export async function topUps(tx: TenantTransactionClient, tenantId: string) {
+  const sub = await tx.subscription.findUnique({
+    where: { tenantId },
+    select: { topUpMinutes: true, topUpScreenings: true },
+  });
+  return { minutes: sub?.topUpMinutes ?? 0, screenings: sub?.topUpScreenings ?? 0 };
+}
+
+export function plusTopUp(limit: number | null, extra: number): number | null {
+  return limit === null ? null : limit + extra;
 }
 
 /**
@@ -61,7 +74,7 @@ export function interviewMinuteLimit(tenant: Tenant): number | null {
  * what "nearly out" means.
  */
 export async function interviewMinuteQuota(
-  tenant: Tenant,
+  tenant: PricedTenant & { id: string },
   tx: TenantTransactionClient
 ) {
   const meter = await tx.usageMeter.findUnique({
@@ -69,7 +82,8 @@ export async function interviewMinuteQuota(
   });
 
   const used = meter?.interviewMinutesUsed ?? 0;
-  const state = quotaState(used, interviewMinuteLimit(tenant));
+  const extra = await topUps(tx, tenant.id);
+  const state = quotaState(used, plusTopUp(interviewMinuteLimit(tenant), extra.minutes));
 
   return {
     ...state,
@@ -81,7 +95,7 @@ export async function interviewMinuteQuota(
 }
 
 export async function assertCanCreateJob(
-  tenant: Tenant,
+  tenant: PricedTenant & { id: string },
   tx: TenantTransactionClient
 ): Promise<void> {
   const limit = activeJobLimit(tenant);
@@ -102,11 +116,12 @@ export async function assertCanCreateJob(
 }
 
 export async function assertScreeningQuota(
-  tenant: Tenant,
+  tenant: PricedTenant & { id: string },
   tx: TenantTransactionClient
 ): Promise<void> {
-  const limit = screeningLimit(tenant);
-  if (limit === null) return;
+  const planLimit = screeningLimit(tenant);
+  if (planLimit === null) return;
+  const limit = planLimit + (await topUps(tx, tenant.id)).screenings;
 
   const meter = await tx.usageMeter.findUnique({
     where: { tenantId_period: { tenantId: tenant.id, period: currentUsagePeriod() } },

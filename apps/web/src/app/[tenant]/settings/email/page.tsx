@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Time from "@/components/Time";
 
 interface EmailConnection {
   id: string;
@@ -534,7 +535,12 @@ function ConnectionRow({
             </div>
             <div className="mt-0.5 truncate text-xs text-[var(--text-muted)]">
               {conn.imapHost}:{conn.imapPort} · {conn.folder} · {conn.autoRoute ? "all jobs" : "one job"}
-              {conn.lastPollAt && ` · last checked ${new Date(conn.lastPollAt).toLocaleString()}`}
+              {conn.lastPollAt && (
+                <>
+                  {" "}
+                  · last checked <Time value={conn.lastPollAt} />
+                </>
+              )}
             </div>
             {conn.errorDetail && <div className="mt-0.5 text-xs text-[var(--danger)]">{conn.errorDetail}</div>}
           </div>

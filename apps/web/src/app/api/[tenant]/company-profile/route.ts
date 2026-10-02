@@ -11,6 +11,7 @@ import { authorizeTenant, withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { z } from "zod";
 import { deleteAsset } from "@/lib/storage";
+import { platformSettings } from "@/lib/platform-settings";
 
 export const runtime = "nodejs";
 
@@ -99,6 +100,12 @@ export async function PATCH(
     }
 
     const { ctx, tx } = await authorizeTenant(tenant, Action.settingsUpdate);
+
+    // The length cap is a platform setting, so it can change without a deploy.
+    const { descriptionCap } = await platformSettings();
+    if (data.description && data.description.length > descriptionCap) {
+      throw new ValidationError(`Keep the company description under ${descriptionCap} characters.`);
+    }
 
     return tx(async (db) => {
       // Checked rather than trusted: without this, any asset id in the tenant —

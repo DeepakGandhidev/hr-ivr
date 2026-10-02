@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Time from "@/components/Time";
 
 interface Me {
   id: string;
@@ -398,7 +399,7 @@ export default function PersonalProfilePage({ params }: { params: { tenant: stri
                       {s.userAgent ?? "Unknown device"}
                     </td>
                     <td>{s.ip ?? "—"}</td>
-                    <td>{s.lastSeenAt ? new Date(s.lastSeenAt).toLocaleString() : "—"}</td>
+                    <td><Time value={s.lastSeenAt} /></td>
                   </tr>
                 ))}
               </tbody>

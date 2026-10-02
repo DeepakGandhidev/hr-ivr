@@ -10,15 +10,21 @@ import {
 import { authorizeTenant } from "@/lib/authz";
 import { Prisma } from "@pratibha/prisma";
 import { handleApi } from "@/lib/api-errors";
-import { getOrCreateSubscription, TOP_UP_PACKS } from "@/lib/subscription";
+import { getOrCreateSubscription } from "@/lib/subscription";
+import { livePacks } from "@/lib/pricing";
 import { paymentProvider, sellerIdentity } from "@/lib/payments";
 import { z } from "zod";
 
 export const runtime = "nodejs";
 
-const topUpSchema = z.object({
-  minutes: z.number().int().positive(),
-});
+const topUpSchema = z
+  .object({
+    /** A published pack. */
+    packId: z.string().min(1).optional(),
+    /** The older request shape: a minutes pack by its size. */
+    minutes: z.number().int().positive().optional(),
+  })
+  .refine((v) => v.packId || v.minutes, "Choose a top-up pack");
 
 /**
  * Buy a pack of interview minutes.
@@ -43,10 +49,16 @@ export async function POST(
       throw new ValidationError("Choose a top-up pack", parsed.error.flatten());
     }
 
-    const pack = TOP_UP_PACKS.find((p) => p.minutes === parsed.data.minutes);
-    if (!pack) throw new ValidationError("That top-up pack is not available.");
-
     const { ctx, tx } = await authorizeTenant(tenant, Action.billingManage);
+
+    // Only packs published in the admin panel are on sale.
+    const packs = await livePacks();
+    const pack = parsed.data.packId
+      ? packs.find((p) => p.id === parsed.data.packId)
+      : packs.find((p) => p.kind === "minutes" && p.quantity === parsed.data.minutes);
+    if (!pack) throw new ValidationError("That top-up pack is not available.");
+    const pricePaise = pack.priceInr * 100;
+    const unit = pack.kind === "minutes" ? "interview minutes" : "CV screenings";
     const seller = sellerIdentity();
     const provider = paymentProvider();
 
@@ -61,9 +73,9 @@ export async function POST(
       const totals = calculateInvoice({
         lines: [
           {
-            description: `${pack.minutes} interview minutes (top-up)`,
-            quantity: pack.minutes,
-            unitPaise: Math.round(pack.pricePaise / pack.minutes),
+            description: `${pack.quantity} ${unit} (top-up)`,
+            quantity: 1,
+            unitPaise: pricePaise,
           },
         ],
         sellerState: seller.state,
@@ -112,7 +124,10 @@ export async function POST(
 
       await db.subscription.update({
         where: { id: subscription.id },
-        data: { topUpMinutes: { increment: pack.minutes } },
+        data:
+          pack.kind === "minutes"
+            ? { topUpMinutes: { increment: pack.quantity } }
+            : { topUpScreenings: { increment: pack.quantity } },
       });
 
       await writeAuditLog(db, {
@@ -121,12 +136,13 @@ export async function POST(
         action: "subscription.top_up_purchased",
         entity: "subscription",
         entityId: subscription.id,
-        after: { minutes: pack.minutes, invoice: invoice.number, totalPaise: invoice.totalPaise },
+        after: { packId: pack.id, kind: pack.kind, quantity: pack.quantity, invoice: invoice.number, totalPaise: invoice.totalPaise },
       });
 
       return NextResponse.json({
         invoice,
-        minutesAdded: pack.minutes,
+        minutesAdded: pack.kind === "minutes" ? pack.quantity : 0,
+        screeningsAdded: pack.kind === "screenings" ? pack.quantity : 0,
         // Honest about what did and did not happen.
         paid: false,
         note: provider.canCharge

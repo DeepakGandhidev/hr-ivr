@@ -242,18 +242,19 @@ export function JobTabs({ active }: { active: JobTab }) {
   const { tenant, jobId, summary } = useJobSummary();
   const c = summary?.counts;
   const base = `/${tenant}/jobs/${jobId}`;
-  const tabs: Array<{ key: JobTab; label: string; href: string; count?: number; countLabel?: string }> = [
+  // countLabel takes the count so a screen reader hears "1 candidate", not "1 candidates".
+  const tabs: Array<{ key: JobTab; label: string; href: string; count?: number; countLabel?: (n: number) => string }> = [
     { key: "studio", label: "JD Studio", href: base },
-    { key: "candidates", label: "Candidates", href: `${base}/candidates`, count: c?.applications, countLabel: "candidates" },
+    { key: "candidates", label: "Candidates", href: `${base}/candidates`, count: c?.applications, countLabel: (n) => plural(n, "candidate") },
     {
       key: "shortlist",
       label: "Shortlist",
       href: `${base}/shortlist`,
       count: c?.awaitingApproval,
-      countLabel: "waiting for approval",
+      countLabel: (n) => `${n} waiting for approval`,
     },
     { key: "publish", label: "Publish", href: `${base}/publish` },
-    { key: "interviews", label: "Interviews", href: `${base}/interviews`, count: c?.interviewed, countLabel: "interviewed" },
+    { key: "interviews", label: "Interviews", href: `${base}/interviews`, count: c?.interviewed, countLabel: (n) => `${n} interviewed` },
   ];
 
   return (
@@ -264,7 +265,7 @@ export function JobTabs({ active }: { active: JobTab }) {
           href={t.href}
           className="job-tab"
           aria-current={active === t.key ? "page" : undefined}
-          aria-label={t.count !== undefined ? `${t.label}, ${t.count} ${t.countLabel}` : undefined}
+          aria-label={t.count !== undefined && t.countLabel ? `${t.label}, ${t.countLabel(t.count)}` : undefined}
         >
           {t.label}
           {t.count !== undefined && <span aria-hidden="true"> · {t.count}</span>}

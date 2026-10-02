@@ -33,13 +33,24 @@ type View = "open" | "archived";
 type Sort = "newest" | "applications" | "longest";
 
 const SORTS: Array<{ value: Sort; label: string }> = [
-  { value: "newest", label: "Newest first" },
+  { value: "newest", label: "Newest" },
   { value: "applications", label: "Most applications" },
   { value: "longest", label: "Longest open" },
 ];
 
-/** When a role went public, or was created if it never has. */
-const openSince = (j: CardJob) => j.publish.firstPublishedAt ?? j.createdAt;
+/**
+ * "Longest open" follows the "Open N days" line on the cards: roles that went
+ * public first, longest open at the top, then roles never published, oldest
+ * first. Mixing the two on one date put a draft between "Open 20 days" and
+ * "Open 9 days", which reads as a wrong sort.
+ */
+function byLongestOpen(a: CardJob, b: CardJob): number {
+  const pa = a.publish.firstPublishedAt;
+  const pb = b.publish.firstPublishedAt;
+  if (pa && pb) return pa.localeCompare(pb);
+  if (pa || pb) return pa ? -1 : 1;
+  return a.createdAt.localeCompare(b.createdAt);
+}
 
 /**
  * The Jobs list: one card per role, carrying the state of hiring for it.
@@ -102,7 +113,7 @@ export default function JobsPage({ params }: { params: { tenant: string } }) {
     const by: Record<Sort, (a: CardJob, b: CardJob) => number> = {
       newest: (a, b) => b.createdAt.localeCompare(a.createdAt),
       applications: (a, b) => b.counts.applications - a.counts.applications || b.createdAt.localeCompare(a.createdAt),
-      longest: (a, b) => openSince(a).localeCompare(openSince(b)),
+      longest: byLongestOpen,
     };
     return [...list].sort(by[sort]);
   }, [jobs, query, sort]);
@@ -234,11 +245,14 @@ function JobCard({
     onArchived,
   });
 
+  const daysOpen = job.publish.firstPublishedAt ? daysBetween(job.publish.firstPublishedAt) : null;
   const since = archived
     ? null
-    : job.publish.firstPublishedAt
-      ? `Open ${plural(daysBetween(job.publish.firstPublishedAt), "day")}`
-      : `Created ${timeAgo(job.createdAt)}`;
+    : daysOpen === null
+      ? `Created ${timeAgo(job.createdAt)}`
+      : daysOpen === 0
+        ? "Opened today"
+        : `Open ${plural(daysOpen, "day")}`;
 
   const menu: ActionMenuItem[] = [
     {

@@ -1,4 +1,5 @@
 import { DEFAULT_SCREENING_THRESHOLD, SUPPORTED_LANGUAGES } from "@pratibha/shared";
+import { planClearsGate, platformSettings } from "@/lib/platform-settings";
 import type { TenantTransactionClient } from "@/lib/authz";
 import { describeCallWindows } from "@/lib/format";
 
@@ -342,24 +343,28 @@ export interface DbConfig {
   portalPosts: boolean;
 }
 
-const DB_CONFIG_DEFAULTS: DbConfig = { scoreGapThreshold: 2.0, portalPosts: true };
-
 /**
- * UI thresholds and toggles live on the tenant's plan row (plans.features),
- * which is platform configuration in the database, so they can be tuned per
- * plan without a deploy.
+ * UI thresholds and plan gates. The platform-wide values come from the admin
+ * panel's Platform settings; a plan row can still switch a feature off with
+ * plans.features (portalPosts: false), which wins over the gate.
  */
 export async function dbConfigFor(tx: Tx, planId: string): Promise<DbConfig> {
-  const plan = await tx.plan.findUnique({ where: { id: planId }, select: { features: true } }).catch(() => null);
+  const [plan, settings] = await Promise.all([
+    tx.plan.findUnique({ where: { id: planId }, select: { key: true, features: true } }).catch(() => null),
+    platformSettings(),
+  ]);
   const f = (plan?.features ?? {}) as Record<string, unknown>;
-  const gap = Number(f.reportScoreGapThreshold);
+  const planGap = Number(f.reportScoreGapThreshold);
   return {
-    scoreGapThreshold: Number.isFinite(gap) && gap > 0 ? gap : DB_CONFIG_DEFAULTS.scoreGapThreshold,
-    portalPosts: f.portalPosts === false ? false : DB_CONFIG_DEFAULTS.portalPosts,
+    scoreGapThreshold: Number.isFinite(planGap) && planGap > 0 ? planGap : settings.scoreGapThreshold,
+    portalPosts: f.portalPosts === false ? false : planClearsGate(plan?.key ?? planId, settings.portalPostsGate),
   };
 }
 
 /** The per-job screening threshold, which also colours the score bar. */
-export function scoreThresholdOf(job: { screeningThreshold: number | null }): number {
-  return job.screeningThreshold ?? DEFAULT_SCREENING_THRESHOLD;
+export function scoreThresholdOf(
+  job: { screeningThreshold: number | null },
+  platformDefault: number = DEFAULT_SCREENING_THRESHOLD
+): number {
+  return job.screeningThreshold ?? platformDefault;
 }

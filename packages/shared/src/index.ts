@@ -9,3 +9,4 @@ export * from './interviewMinutes.js';
 export * from './gst.js';
 export * from './notifications.js';
 export * from './invoicing.js';
+export * from './workspaceDefaults.js';

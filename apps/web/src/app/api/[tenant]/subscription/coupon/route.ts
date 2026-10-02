@@ -46,11 +46,14 @@ export async function POST(
       const subscription = await getOrCreateSubscription(db, ctx.tenant);
 
       const coupon = await db.coupon.findUnique({ where: { code } });
-      if (!coupon || !coupon.active) return refuse();
-      if (coupon.expiresAt && coupon.expiresAt < new Date()) return refuse();
-      if (coupon.maxRedemptions !== null && coupon.redeemedCount >= coupon.maxRedemptions) {
-        return refuse();
-      }
+      const now = new Date();
+      // The lifecycle the admin panel manages: only an active code, inside its
+      // dates, on a plan it applies to. Draft, scheduled, paused and ended codes
+      // all refuse the same way.
+      if (!coupon || coupon.status !== "active" || !coupon.active) return refuse();
+      if (coupon.startsAt && coupon.startsAt > now) return refuse();
+      if (coupon.expiresAt && coupon.expiresAt < now) return refuse();
+      if (coupon.applicablePlans.length > 0 && !coupon.applicablePlans.includes(ctx.tenant.plan.key)) return refuse();
 
       const already = await db.couponRedemption.findUnique({
         where: {
@@ -59,12 +62,19 @@ export async function POST(
       });
       if (already) return refuse();
 
+      // The cap, checked and taken in one statement, so two redemptions racing
+      // for the last place cannot both get it.
+      const taken = await db.coupon.updateMany({
+        where: {
+          id: coupon.id,
+          ...(coupon.maxRedemptions !== null ? { redeemedCount: { lt: coupon.maxRedemptions } } : {}),
+        },
+        data: { redeemedCount: { increment: 1 } },
+      });
+      if (taken.count === 0) return refuse();
+
       await db.couponRedemption.create({
         data: { couponId: coupon.id, subscriptionId: subscription.id },
-      });
-      await db.coupon.update({
-        where: { id: coupon.id },
-        data: { redeemedCount: { increment: 1 } },
       });
 
       let applied: string;

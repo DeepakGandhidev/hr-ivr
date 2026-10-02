@@ -2,6 +2,7 @@ import { prisma, withTenant } from '@pratibha/prisma';
 import { TRIAL_LIMITS, advanceCandidateStatus } from '@pratibha/shared';
 import { LlmProvider } from './provider.js';
 import { getOrCreateUsageMeter, incrementScreeningUsage } from '../db/index.js';
+import { isTenantPaused } from '../lib/tenantStatus.js';
 
 const DEFAULT_PROMPT = `You are a CV screening assistant for an inbound hiring pipeline.
 
@@ -51,12 +52,20 @@ async function withinQuota(tenantId) {
     include: { plan: true },
   });
   if (!tenant) return { ok: false, reason: 'tenant_not_found' };
+  // Suspension pauses screenings along with everything else.
+  if (isTenantPaused(tenant)) return { ok: false, reason: 'workspace_paused' };
 
+  // The live trial, or the workspace's own plan version, as published in the
+  // admin panel; plus any screenings bought or granted on top.
   const isTrial = tenant.status === 'trial';
-  const planLimits = isTrial ? TRIAL_LIMITS : (tenant.plan?.limits ?? {});
+  const trial = isTrial
+    ? await prisma.trialConfig.findFirst({ where: { status: 'published' }, orderBy: { publishedAt: 'desc' } })
+    : null;
+  const planLimits = isTrial ? { screenings: trial?.screenings ?? TRIAL_LIMITS.screenings } : (tenant.plan?.limits ?? {});
+  const sub = await prisma.subscription.findUnique({ where: { tenantId }, select: { topUpScreenings: true } });
   const meter = await getOrCreateUsageMeter(tenantId);
 
-  const limit = Number(planLimits.screenings ?? Infinity);
+  const limit = Number(planLimits.screenings ?? Infinity) + (sub?.topUpScreenings ?? 0);
   if (meter.screeningsUsed >= limit) {
     return { ok: false, reason: 'screening_quota_exceeded', limit, used: meter.screeningsUsed };
   }

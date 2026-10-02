@@ -1,5 +1,6 @@
 import { STATES, TERMINAL, TOOLS_BY_STATE, isVerified } from './states.js';
 import { lookupCandidateByEmail, recordInterviewCall, updateInterviewCall } from '../db/index.js';
+import { isTenantPaused } from './tenantStatus.js';
 import { emailsMatch } from './emailMatch.js';
 
 function deriveCriteria(job) {
@@ -269,6 +270,10 @@ export class ToolExecutor {
 
     if (session.emailAttempts >= 2) {
       session.emailVerified = false;
+      session.unknownReason = {
+        reasonCode: 'identity_failed',
+        reason: 'The number matched a candidate, but the email check failed twice',
+      };
       session.finish(TERMINAL.UNKNOWN_CALLER);
       return {
         verified: false,
@@ -288,10 +293,30 @@ export class ToolExecutor {
     const lookup = await lookupCandidateByEmail(email);
 
     if (!lookup?.candidate) {
+      session.unknownReason = {
+        reasonCode: 'email_no_match',
+        reason: 'No invitation on this number, and the email given matched no application',
+      };
       session.finish(TERMINAL.UNKNOWN_CALLER);
       return {
         recognised: false,
         instruction: 'Politely say you cannot find an application under that email address, ask them to check it and apply again if needed, thank them, and end the call.'
+      };
+    }
+
+    // A workspace an admin has paused takes no interviews, however the caller
+    // was identified.
+    if (isTenantPaused(lookup.tenant)) {
+      session.unknownReason = {
+        reasonCode: 'workspace_paused',
+        reason: `Matched ${lookup.tenant.name}, which is paused, so the caller heard the polite refusal`,
+        tenantId: lookup.tenant.id,
+        candidateId: lookup.candidate.id,
+      };
+      session.finish(TERMINAL.UNKNOWN_CALLER);
+      return {
+        recognised: false,
+        instruction: 'Say interviews for this role are paused at the moment so you cannot go ahead today, that the team will be in touch by email, thank them, and end the call. Do not say why.'
       };
     }
 
@@ -300,6 +325,10 @@ export class ToolExecutor {
     session.transcript?.record('identity.verified', { heard: email, via: 'email' });
 
     if (this.config?.requireShortlistApproval && !lookup.approved) {
+      session.unknownReason = {
+        reasonCode: 'not_approved',
+        reason: `Matched ${lookup.tenant?.name ?? 'a workspace'}, but the candidate is not on an approved shortlist`,
+      };
       session.finish(TERMINAL.UNKNOWN_CALLER);
       return {
         recognised: true,
@@ -401,6 +430,10 @@ export class ToolExecutor {
 
   async #endCall({ outcome }, session) {
     if (outcome === 'completed' && !isVerified(session, { requireApproval: this.config?.requireShortlistApproval })) {
+      session.unknownReason = session.unknownReason ?? {
+        reasonCode: 'not_verified',
+        reason: 'The call ended before the caller was verified',
+      };
       session.finish(TERMINAL.UNKNOWN_CALLER);
       return { ended: true };
     }

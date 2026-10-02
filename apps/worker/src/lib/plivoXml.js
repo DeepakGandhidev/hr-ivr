@@ -119,3 +119,14 @@ export function busyXml(_config) {
   <Hangup/>
 </Response>`;
 }
+
+/**
+ * A blocked number. Rejected before the stream opens: the agent never hears
+ * it, no call record is written and nothing is metered to any workspace.
+ */
+export function blockedXml() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Hangup reason="rejected"/>
+</Response>`;
+}

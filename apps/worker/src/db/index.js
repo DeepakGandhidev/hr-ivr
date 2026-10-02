@@ -354,4 +354,42 @@ export async function incrementInterviewUsage(tenantId, minutes, period = curren
   });
 }
 
+// ---------------------------------------------------------------------------
+// The line: blocked numbers, unknown callers, paused workspaces.
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether an admin has blocked this number. Counts the refused call on the
+ * block itself, so the Calls page can show it working; nothing else about the
+ * call is recorded anywhere, because it never reached the agent.
+ */
+export async function checkBlockedNumber(raw) {
+  const phoneE164 = normalizePhone(raw);
+  if (!phoneE164) return false;
+  // The admin panel stores Indian numbers as +91 followed by ten digits; a
+  // caller ID that arrives as ten bare digits must still match its block.
+  const forms = [phoneE164];
+  if (/^\+\d{10}$/.test(phoneE164)) forms.push(`+91${phoneE164.slice(1)}`);
+  const block = await prisma.blockedNumber.findFirst({ where: { phoneE164: { in: forms }, unblockedAt: null } });
+  if (!block) return false;
+  await prisma.blockedNumber
+    .update({ where: { id: block.id }, data: { hits: { increment: 1 }, lastHitAt: new Date() } })
+    .catch(() => {});
+  return true;
+}
+
+/** A call that matched no invitation, and why, for the admin Calls page. */
+export async function recordUnknownCall({ callerNumber, reasonCode, reason, tenantId = null, candidateId = null, interviewCallId = null }) {
+  return prisma.unknownCall.create({
+    data: {
+      callerNumber: normalizePhone(callerNumber) ?? String(callerNumber ?? 'withheld'),
+      reasonCode,
+      reason,
+      tenantId,
+      candidateId,
+      interviewCallId,
+    },
+  });
+}
+
 export { prisma };

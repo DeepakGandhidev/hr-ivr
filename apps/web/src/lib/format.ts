@@ -110,13 +110,16 @@ export function timeAgo(value: DateInput, now: DateInput = new Date()): string {
   return formatDate(d);
 }
 
-/** A call's length in whole minutes, "12 min". Null when it has not ended. */
+/**
+ * A call's length in whole minutes, "12 min". Null when it has not ended. The
+ * space does not break, so a narrow "When" column never strands "min".
+ */
 export function callMinutes(startedAt: DateInput, endedAt: DateInput): string | null {
   const a = toDate(startedAt);
   const b = toDate(endedAt);
   if (!a || !b) return null;
   const mins = Math.max(1, Math.round((b.getTime() - a.getTime()) / 60_000));
-  return `${mins} min`;
+  return `${mins} min`;
 }
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

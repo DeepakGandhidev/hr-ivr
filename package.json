@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "dev": "concurrently \"npm run dev -w apps/web\" \"npm run dev -w apps/worker\"",
-    "build": "npm run build -w apps/web && npm run build -w apps/worker",
+    "build": "npm run build -w apps/web && npm run build -w apps/admin && npm run build -w apps/worker",
     "start": "npm run start -w apps/worker",
     "test": "npm run test --workspaces --if-present",
     "test:authz": "npm run test:authz -w apps/web",
@@ -28,7 +28,10 @@
     "db:reset-production": "node scripts/reset-production.mjs",
     "dev:up": "./scripts/dev-up.sh",
     "dev:down": "./scripts/dev-down.sh",
-    "dev:status": "./scripts/dev-up.sh --status"
+    "dev:status": "./scripts/dev-up.sh --status",
+    "dev:admin": "npm run dev -w apps/admin",
+    "build:admin": "npm run build -w apps/admin",
+    "test:admin": "npm run test -w apps/admin"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

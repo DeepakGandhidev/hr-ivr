@@ -8,6 +8,8 @@ const PUBLIC_PATHS = [
   "/verify-email",
   "/auth",
   "/api/auth",
+  "/api/public/",
+  "/reset-password",
   "/j/",
   "/webhook/",
   "/_next/",

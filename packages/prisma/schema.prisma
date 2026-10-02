@@ -15,25 +15,122 @@ datasource db {
 // Platform
 // ---------------------------------------------------------------------------
 
+enum PlanStatus {
+  draft
+  published
+}
+
+enum PlanVisibility {
+  public
+  hidden
+}
+
+/// One version of one plan.
+///
+/// Rows are versioned rather than edited in place so that a price change
+/// grandfathers: a workspace points at the exact version it signed up on and
+/// keeps that price, while new signups take the latest published version of
+/// the same `key`. An edit in the admin panel is a `draft` row (at most one
+/// per key, enforced by a partial unique index); publishing flips every draft
+/// to `published` in one transaction, so the website, the portal and Saarthi
+/// switch together or not at all.
 model Plan {
-  id          String   @id @default(cuid())
-  name        String   @unique
-  priceInr    Int      @map("price_inr")
-  limits      Json
-  features    Json
-  createdAt   DateTime @default(now()) @map("created_at")
+  id              String         @id @default(cuid())
+  /// The plan family: starter | growth | scale.
+  key             String
+  version         Int            @default(1)
+  name            String
+  /// The sale price, per month. The only price ever charged or invoiced.
+  priceInr        Int            @map("price_inr")
+  /// Display only: shown struck through beside the sale price. Null shows none.
+  slashedPriceInr Int?           @map("slashed_price_inr")
+  minutes         Int            @map("interview_minutes")
+  screenings      Int
+  /// Open jobs. Null means unlimited.
+  jobLimit        Int?           @map("job_limit")
+  visibility      PlanVisibility @default(public)
+  status          PlanStatus     @default(published)
+  publishedBy     String?        @map("published_by")
+  publishedAt     DateTime?      @map("published_at")
+  /// Kept in step with the columns above for readers that predate them (the
+  /// worker reads limits.screenings).
+  limits          Json
+  features        Json
+  createdAt       DateTime       @default(now()) @map("created_at")
 
-  tenants     Tenant[]
+  tenants Tenant[]
 
+  @@unique([key, version])
   @@map("plans")
 }
 
+/// A pack of minutes or screenings bought on top of a plan.
+///
+/// Published with pricing, like plans: an edit is a draft row that `replaces`
+/// the published one, and publishing retires what it replaces.
+enum TopupPackKind {
+  minutes
+  screenings
+}
+
+enum PricingRowStatus {
+  draft
+  published
+  retired
+}
+
+model TopupPack {
+  id              String           @id @default(cuid())
+  kind            TopupPackKind
+  quantity        Int
+  priceInr        Int              @map("price_inr")
+  validityDays    Int              @map("validity_days")
+  status          PricingRowStatus @default(draft)
+  /// The published pack this draft will replace on publish.
+  replacesId      String?          @map("replaces_id")
+  /// A draft that, on publish, retires `replacesId` without a successor.
+  retireOnPublish Boolean          @default(false) @map("retire_on_publish")
+  publishedBy     String?          @map("published_by")
+  publishedAt     DateTime?        @map("published_at")
+  createdAt       DateTime         @default(now()) @map("created_at")
+
+  @@index([status])
+  @@map("topup_packs")
+}
+
+/// What a new workspace gets before it pays. Versioned like plans.
+model TrialConfig {
+  id          String     @id @default(cuid())
+  minutes     Int
+  days        Int
+  screenings  Int
+  jobLimit    Int        @map("job_limit")
+  status      PlanStatus @default(draft)
+  publishedBy String?    @map("published_by")
+  publishedAt DateTime?  @map("published_at")
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  @@index([status, publishedAt])
+  @@map("trial_config")
+}
+
+/// Platform-wide tunables, read by the portal and written only by the admin
+/// panel. One row per key; every change is recorded in activity_log.
+model PlatformSetting {
+  key       String   @id
+  value     Json
+  updatedBy String?  @map("updated_by")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("platform_settings")
+}
+
 model PlatformUser {
-  id              String   @id @default(cuid())
-  email           String   @unique
-  name            String?
-  authProviderId  String?  @unique @map("auth_provider_id")
-  createdAt       DateTime @default(now()) @map("created_at")
+  id             String   @id @default(cuid())
+  email          String   @unique
+  name           String?
+  authProviderId String?  @unique @map("auth_provider_id")
+  createdAt      DateTime @default(now()) @map("created_at")
 
   @@map("platform_users")
 }
@@ -45,7 +142,10 @@ model PlatformUser {
 enum TenantStatus {
   trial
   active
+  past_due
   suspended
+  deleted_pending
+  deleted
 }
 
 /// The company's own details, as distinct from how it sounds on a call.
@@ -59,30 +159,30 @@ enum TenantStatus {
 /// profile and no profile mean the same thing, and the second needs no migration
 /// to backfill.
 model CompanyProfile {
-  id              String   @id @default(cuid())
-  tenantId        String   @unique @map("tenant_id")
+  id       String @id @default(cuid())
+  tenantId String @unique @map("tenant_id")
 
   /// Registered entity name, for invoices and contracts.
-  legalName       String?  @map("legal_name")
+  legalName      String? @map("legal_name")
   /// Registered / billing address, free-form: Indian addresses do not fit
   /// fixed fields, and an invoice needs it as written.
-  billingAddress  String?  @map("billing_address")
+  billingAddress String? @map("billing_address")
   /// State, which decides CGST+SGST versus IGST on an invoice. Held separately
   /// from the address because it is a calculation input, not decoration.
-  billingState    String?  @map("billing_state")
-  gstin           String?
+  billingState   String? @map("billing_state")
+  gstin          String?
   /// Shown on the hosted careers page.
-  description     String?
+  description    String?
 
   /// The logo, as a TenantAsset id. Not a URL: the file is served through a
   /// tenant-scoped route, so storing a path would invite bypassing it.
-  logoAssetId     String?  @map("logo_asset_id")
+  logoAssetId String? @map("logo_asset_id")
 
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  logo            TenantAsset? @relation("CompanyLogo", fields: [logoAssetId], references: [id], onDelete: SetNull)
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  logo   TenantAsset? @relation("CompanyLogo", fields: [logoAssetId], references: [id], onDelete: SetNull)
 
   @@map("company_profiles")
 }
@@ -113,9 +213,9 @@ model TenantAsset {
   uploadedBy  String?         @map("uploaded_by")
   createdAt   DateTime        @default(now()) @map("created_at")
 
-  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   companyLogos CompanyProfile[] @relation("CompanyLogo")
-  userPhotos   User[]          @relation("UserPhoto")
+  userPhotos   User[]           @relation("UserPhoto")
 
   @@index([tenantId, kind])
   @@map("tenant_assets")
@@ -152,39 +252,41 @@ enum InvoiceStatus {
 /// already reads. This row carries the billing state that planId cannot express:
 /// when the period ends, whether a cancellation is pending, and why.
 model Subscription {
-  id                 String             @id @default(cuid())
-  tenantId           String             @unique @map("tenant_id")
-  planId             String             @map("plan_id")
-  status             SubscriptionStatus @default(trialing)
+  id       String             @id @default(cuid())
+  tenantId String             @unique @map("tenant_id")
+  planId   String             @map("plan_id")
+  status   SubscriptionStatus @default(trialing)
 
   /// The billing cycle. "Days left" on the subscriptions page is the single
   /// most important number on it, and it comes from here.
-  periodStart        DateTime           @map("period_start")
-  periodEnd          DateTime           @map("period_end")
+  periodStart DateTime @map("period_start")
+  periodEnd   DateTime @map("period_end")
 
   /// Minutes bought on top of the plan, for this period. Spent after the plan
   /// allowance, so a top-up cannot silently expire while plan minutes remain.
-  topUpMinutes       Int                @default(0) @map("top_up_minutes")
+  topUpMinutes    Int @default(0) @map("top_up_minutes")
+  /// Screenings bought (or granted) on top of the plan, for this period.
+  topUpScreenings Int @default(0) @map("top_up_screenings")
 
   /// Set when cancellation is requested, not when it takes effect - the
   /// customer keeps what they paid for until periodEnd.
-  cancelRequestedAt  DateTime?          @map("cancel_requested_at")
-  cancelReason       String?            @map("cancel_reason")
-  cancelComment      String?            @map("cancel_comment")
+  cancelRequestedAt DateTime? @map("cancel_requested_at")
+  cancelReason      String?   @map("cancel_reason")
+  cancelComment     String?   @map("cancel_comment")
 
   /// Finance's address, deliberately not a portal login: an invoice should
   /// reach the person who pays without giving them the hiring data.
-  billingContactEmail String?           @map("billing_contact_email")
+  billingContactEmail String? @map("billing_contact_email")
   /// Which billing emails that contact receives, as { key: boolean }.
-  billingContactPrefs Json?             @map("billing_contact_prefs")
+  billingContactPrefs Json?   @map("billing_contact_prefs")
 
-  createdAt          DateTime           @default(now()) @map("created_at")
-  updatedAt          DateTime           @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  paymentMethods     PaymentMethod[]
-  invoices           Invoice[]
-  couponRedemptions  CouponRedemption[]
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  paymentMethods    PaymentMethod[]
+  invoices          Invoice[]
+  couponRedemptions CouponRedemption[]
 
   @@map("subscriptions")
 }
@@ -207,7 +309,7 @@ model PaymentMethod {
   isDefault      Boolean       @default(false) @map("is_default")
   createdAt      DateTime      @default(now()) @map("created_at")
 
-  subscription   Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
 
   @@index([subscriptionId, isDefault])
   @@map("payment_methods")
@@ -226,30 +328,31 @@ model Invoice {
   number         String        @unique
   status         InvoiceStatus @default(issued)
 
-  periodStart    DateTime      @map("period_start")
-  periodEnd      DateTime      @map("period_end")
-  issuedAt       DateTime      @default(now()) @map("issued_at")
-  paidAt         DateTime?     @map("paid_at")
+  periodStart DateTime  @map("period_start")
+  periodEnd   DateTime  @map("period_end")
+  issuedAt    DateTime  @default(now()) @map("issued_at")
+  paidAt      DateTime? @map("paid_at")
 
   /// Line items: description, hsnSac, quantity, unitPaise, amountPaise.
-  lines          Json
+  lines Json
 
   /// Money in paise. Integers, because floating point on money produces
   /// invoices that are off by a rupee and a CA who stops trusting them.
-  subtotalPaise  Int           @map("subtotal_paise")
-  discountPaise  Int           @default(0) @map("discount_paise")
-  cgstPaise      Int           @default(0) @map("cgst_paise")
-  sgstPaise      Int           @default(0) @map("sgst_paise")
-  igstPaise      Int           @default(0) @map("igst_paise")
-  totalPaise     Int           @map("total_paise")
+  subtotalPaise Int @map("subtotal_paise")
+  discountPaise Int @default(0) @map("discount_paise")
+  cgstPaise     Int @default(0) @map("cgst_paise")
+  sgstPaise     Int @default(0) @map("sgst_paise")
+  igstPaise     Int @default(0) @map("igst_paise")
+  totalPaise    Int @map("total_paise")
 
   /// The customer's state at issue time. Decides the tax split, so it is
   /// recorded rather than recomputed.
-  placeOfSupply  String        @map("place_of_supply")
-  seller         Json
-  buyer          Json
+  placeOfSupply String @map("place_of_supply")
+  seller        Json
+  buyer         Json
 
-  subscription   Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  payment      Payment?
 
   @@index([subscriptionId, issuedAt])
   @@map("invoices")
@@ -257,38 +360,61 @@ model Invoice {
 
 enum CouponKind {
   percent
+  /// A flat amount off, in paise.
   amount
   minutes
+}
+
+/// Where a code is in its life. Every transition is made by a named actor and
+/// logged; `scheduled` becomes `active` at startsAt, and `active` becomes
+/// `ended` at expiresAt, both by the system sweep.
+enum CouponStatus {
+  draft
+  scheduled
+  active
+  paused
+  ended
 }
 
 /// A redeemable code. Platform-wide, not tenant-scoped - hence no tenantId and
 /// no RLS policy; redemptions are what belong to a tenant.
 model Coupon {
-  id           String     @id @default(cuid())
-  code         String     @unique
-  kind         CouponKind
+  id              String       @id @default(cuid())
+  code            String       @unique
+  kind            CouponKind
   /// Percent (1-100), paise, or minutes, according to `kind`.
-  value        Int
+  value           Int
   /// Null means unlimited.
-  maxRedemptions Int?     @map("max_redemptions")
-  redeemedCount  Int      @default(0) @map("redeemed_count")
-  expiresAt    DateTime?  @map("expires_at")
-  active       Boolean    @default(true)
-  createdAt    DateTime   @default(now()) @map("created_at")
+  maxRedemptions  Int?         @map("max_redemptions")
+  redeemedCount   Int          @default(0) @map("redeemed_count")
+  /// Plan keys the code applies to. Empty means every plan.
+  applicablePlans String[]     @default([]) @map("applicable_plans")
+  startsAt        DateTime?    @map("starts_at")
+  expiresAt       DateTime?    @map("expires_at")
+  status          CouponStatus @default(active)
+  /// Kept in step with `status` for readers that predate it.
+  active          Boolean      @default(true)
+  createdBy       String?      @map("created_by")
+  endedAt         DateTime?    @map("ended_at")
+  createdAt       DateTime     @default(now()) @map("created_at")
 
-  redemptions  CouponRedemption[]
+  redemptions CouponRedemption[]
 
   @@map("coupons")
 }
 
 model CouponRedemption {
-  id             String       @id @default(cuid())
-  couponId       String       @map("coupon_id")
-  subscriptionId String       @map("subscription_id")
-  redeemedAt     DateTime     @default(now()) @map("redeemed_at")
+  id             String   @id @default(cuid())
+  couponId       String   @map("coupon_id")
+  subscriptionId String   @map("subscription_id")
+  /// The manually recorded payment this code was attached to, in the manual era.
+  paymentId      String?  @unique @map("payment_id")
+  discountPaise  Int      @default(0) @map("discount_paise")
+  redeemedAt     DateTime @default(now()) @map("redeemed_at")
 
-  coupon         Coupon       @relation(fields: [couponId], references: [id], onDelete: Cascade)
-  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  coupon       Coupon       @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  payment      Payment?     @relation(fields: [paymentId], references: [id], onDelete: SetNull)
 
   /// One tenant cannot redeem the same code twice.
   @@unique([couponId, subscriptionId])
@@ -296,27 +422,41 @@ model CouponRedemption {
 }
 
 model Tenant {
-  id            String       @id @default(cuid())
-  name          String
-  slug          String       @unique
-  planId        String       @map("plan_id")
-  trialEndsAt   DateTime?    @map("trial_ends_at")
-  status        TenantStatus @default(trial)
-  createdAt     DateTime     @default(now()) @map("created_at")
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  planId      String       @map("plan_id")
+  trialEndsAt DateTime?    @map("trial_ends_at")
+  status      TenantStatus @default(trial)
+  createdAt   DateTime     @default(now()) @map("created_at")
+
+  /// Who last moved `status`, and when: 'admin:<id>', 'system', or
+  /// 'workspace:<userId>'.
+  statusChangedBy     String?       @map("status_changed_by")
+  statusChangedAt     DateTime?     @map("status_changed_at")
+  /// What Suspend or Delete moved the workspace away from, so Resume and
+  /// Restore return it exactly as it was.
+  previousStatus      TenantStatus? @map("previous_status")
+  /// The first admin's deletion request, waiting for a second admin.
+  deletionRequestedBy String?       @map("deletion_requested_by")
+  deletionRequestedAt DateTime?     @map("deletion_requested_at")
+  /// End of the 30 day hold. Erasure runs only after this.
+  deletionHoldUntil   DateTime?     @map("deletion_hold_until")
 
   companyProfile CompanyProfile?
-  assets        TenantAsset[]
-  subscription  Subscription?
+  assets         TenantAsset[]
+  subscription   Subscription?
+  payments       Payment[]
 
-  plan          Plan         @relation(fields: [planId], references: [id])
-  users         User[]
-  emailConnections EmailConnection[]
-  jobs          Job[]
-  candidates    Candidate[]
-  outreachTemplates OutreachTemplate[]
+  plan               Plan                @relation(fields: [planId], references: [id])
+  users              User[]
+  emailConnections   EmailConnection[]
+  jobs               Job[]
+  candidates         Candidate[]
+  outreachTemplates  OutreachTemplate[]
   interviewProtocols InterviewProtocol[]
-  usageMeters   UsageMeter[]
-  auditLogs     AuditLog[]
+  usageMeters        UsageMeter[]
+  auditLogs          AuditLog[]
 
   @@map("tenants")
 }
@@ -329,28 +469,34 @@ enum UserRole {
 }
 
 model User {
-  id              String   @id @default(cuid())
-  tenantId        String   @map("tenant_id")
-  email           String
-  name            String?
-  role            UserRole
-  authProviderId  String?  @unique @map("auth_provider_id")
-  createdAt       DateTime @default(now()) @map("created_at")
+  id             String   @id @default(cuid())
+  tenantId       String   @map("tenant_id")
+  email          String
+  name           String?
+  role           UserRole
+  authProviderId String?  @unique @map("auth_provider_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  /// Set when an admin removes the member. The row stays, because jobs, notes
+  /// and approvals they authored still point at it; their login is deleted and
+  /// unlinked, so they can no longer open the workspace.
+  removedAt DateTime? @map("removed_at")
+  removedBy String?   @map("removed_by")
 
   // --- Personal profile ----------------------------------------------------
 
   /// Profile photo, as a TenantAsset id. Same reasoning as the company logo:
   /// the file is served through a tenant-scoped route, never a bare path.
-  photoAssetId    String?  @map("photo_asset_id")
+  photoAssetId String? @map("photo_asset_id")
 
   /// IANA zone, e.g. "Asia/Kolkata". Timestamps are stored in UTC; this only
   /// decides how they are rendered for this person.
-  timezone        String?
+  timezone String?
 
   /// Which emails this person receives, as { key: boolean }. Absent keys mean
   /// "on" - a notification type added later should reach people rather than be
   /// silently off for everyone who has ever saved preferences.
-  notificationPrefs Json?  @map("notification_prefs")
+  notificationPrefs Json? @map("notification_prefs")
 
   /// Two-factor authentication is deliberately NOT stored here. GoTrue owns it
   /// (auth.mfa_factors) and is the thing that actually gates a login; a second
@@ -358,16 +504,16 @@ model User {
   /// attacker with the password would simply not visit. Enrolment status is
   /// read from GoTrue rather than mirrored, so the two cannot disagree.
 
-  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  photo           TenantAsset? @relation("UserPhoto", fields: [photoAssetId], references: [id], onDelete: SetNull)
-  jobsCreated     Job[]    @relation("CreatedBy")
-  jobsDeleted     Job[]    @relation("DeletedBy")
-  jobVersions     JobVersion[] @relation("JobVersionAuthor")
-  candidateNotes  CandidateNote[] @relation("NoteAuthor")
-  jobDescriptionsApproved JobDescription[] @relation("ApprovedBy")
-  approvals       Approval[]
+  tenant                    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  photo                     TenantAsset?        @relation("UserPhoto", fields: [photoAssetId], references: [id], onDelete: SetNull)
+  jobsCreated               Job[]               @relation("CreatedBy")
+  jobsDeleted               Job[]               @relation("DeletedBy")
+  jobVersions               JobVersion[]        @relation("JobVersionAuthor")
+  candidateNotes            CandidateNote[]     @relation("NoteAuthor")
+  jobDescriptionsApproved   JobDescription[]    @relation("ApprovedBy")
+  approvals                 Approval[]
   interviewProtocolsUpdated InterviewProtocol[] @relation("UpdatedBy")
-  outreachTemplates OutreachTemplate[] @relation("UpdatedBy")
+  outreachTemplates         OutreachTemplate[]  @relation("UpdatedBy")
 
   @@unique([tenantId, email])
   @@map("users")
@@ -391,43 +537,43 @@ enum EmailConnectionStatus {
 }
 
 model EmailConnection {
-  id              String                  @id @default(cuid())
-  tenantId        String                  @map("tenant_id")
-  provider        EmailProvider
-  address         String
-  oauthTokenRef   String?                 @map("oauth_token_ref") // Supabase Vault reference
-  status          EmailConnectionStatus   @default(connected)
-  lastPollAt      DateTime?               @map("last_poll_at")
-  errorDetail     String?                 @map("error_detail")
-  createdAt       DateTime                @default(now()) @map("created_at")
+  id            String                @id @default(cuid())
+  tenantId      String                @map("tenant_id")
+  provider      EmailProvider
+  address       String
+  oauthTokenRef String?               @map("oauth_token_ref") // Supabase Vault reference
+  status        EmailConnectionStatus @default(connected)
+  lastPollAt    DateTime?             @map("last_poll_at")
+  errorDetail   String?               @map("error_detail")
+  createdAt     DateTime              @default(now()) @map("created_at")
 
   // --- IMAP (cPanel/webmail, Zoho, Namecheap, any host) -------------------
-  imapHost        String?                 @map("imap_host")
-  imapPort        Int?                    @map("imap_port")
-  imapSecure      Boolean                 @default(true) @map("imap_secure")
-  imapUsername    String?                 @map("imap_username")
+  imapHost     String? @map("imap_host")
+  imapPort     Int?    @map("imap_port")
+  imapSecure   Boolean @default(true) @map("imap_secure")
+  imapUsername String? @map("imap_username")
   /// AES-256-GCM sealed mailbox password. Never a plaintext credential.
-  imapSecret      String?                 @map("imap_secret")
-  folder          String                  @default("INBOX")
+  imapSecret   String? @map("imap_secret")
+  folder       String  @default("INBOX")
 
   /// IMAP UIDs are only unique within a UIDVALIDITY generation. If the server
   /// renumbers the mailbox, UIDVALIDITY changes and lastSeenUid becomes
   /// meaningless, so both are stored and compared together before it is used.
-  uidValidity     BigInt?                 @map("uid_validity")
-  lastSeenUid     BigInt?                 @map("last_seen_uid")
+  uidValidity BigInt? @map("uid_validity")
+  lastSeenUid BigInt? @map("last_seen_uid")
 
   /// Where candidates from this mailbox are filed. With autoRoute off this is
   /// the destination; with it on this is the fallback for mail that matches no
   /// open job. Either way, null leaves the connection idle rather than
   /// guessing a destination.
-  defaultJobId    String?                 @map("default_job_id")
+  defaultJobId String? @map("default_job_id")
 
   /// One mailbox for every open role: match each application to a job instead
   /// of filing everything against a single one.
-  autoRoute       Boolean                 @default(false) @map("auto_route")
+  autoRoute Boolean @default(false) @map("auto_route")
 
-  tenant          Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  defaultJob      Job?                    @relation(fields: [defaultJobId], references: [id], onDelete: SetNull)
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  defaultJob Job?   @relation(fields: [defaultJobId], references: [id], onDelete: SetNull)
 
   @@index([provider, status, lastPollAt])
   @@map("email_connections")
@@ -445,40 +591,40 @@ enum JobStatus {
 }
 
 model Job {
-  id                String   @id @default(cuid())
-  tenantId          String   @map("tenant_id")
-  slug              String
-  title             String
-  status            JobStatus @default(draft)
-  location          String?
-  salaryBand        String?  @map("salary_band")
-  experienceRange   String?  @map("experience_range")
-  mustHaves         Json     @map("must_haves")
-  goodToHaves       Json     @map("good_to_haves")
+  id                 String    @id @default(cuid())
+  tenantId           String    @map("tenant_id")
+  slug               String
+  title              String
+  status             JobStatus @default(draft)
+  location           String?
+  salaryBand         String?   @map("salary_band")
+  experienceRange    String?   @map("experience_range")
+  mustHaves          Json      @map("must_haves")
+  goodToHaves        Json      @map("good_to_haves")
   // §5 Stage 5 / §9: per-job override of the screening threshold. Null means
   // fall back to DEFAULT_SCREENING_THRESHOLD (70).
-  screeningThreshold Int?    @map("screening_threshold")
-  createdBy         String   @map("created_by")
-  createdAt         DateTime @default(now()) @map("created_at")
+  screeningThreshold Int?      @map("screening_threshold")
+  createdBy          String    @map("created_by")
+  createdAt          DateTime  @default(now()) @map("created_at")
 
   /// Soft delete. A job is never removed: candidates, screenings, calls and
   /// assessment reports all hang off it, and destroying a role would take the
   /// evidence for hiring decisions with it. Every list filters on this being
   /// null; nothing hard-deletes.
-  deletedAt         DateTime? @map("deleted_at")
-  deletedBy         String?   @map("deleted_by")
+  deletedAt DateTime? @map("deleted_at")
+  deletedBy String?   @map("deleted_by")
 
-  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  creator           User     @relation("CreatedBy", fields: [createdBy], references: [id])
-  deleter           User?    @relation("DeletedBy", fields: [deletedBy], references: [id])
-  versions          JobVersion[]
-  descriptions      JobDescription[]
-  posts             JobPost[]
-  candidates        Candidate[]
-  shortlists        Shortlist[]
-  callWindows       CallWindow[]
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creator            User                @relation("CreatedBy", fields: [createdBy], references: [id])
+  deleter            User?               @relation("DeletedBy", fields: [deletedBy], references: [id])
+  versions           JobVersion[]
+  descriptions       JobDescription[]
+  posts              JobPost[]
+  candidates         Candidate[]
+  shortlists         Shortlist[]
+  callWindows        CallWindow[]
   interviewProtocols InterviewProtocol[]
-  emailConnections  EmailConnection[]
+  emailConnections   EmailConnection[]
 
   @@unique([tenantId, slug])
   @@map("jobs")
@@ -490,17 +636,17 @@ enum DescriptionGeneratedBy {
 }
 
 model JobDescription {
-  id            String                  @id @default(cuid())
-  jobId         String                  @map("job_id")
-  version       Int
-  bodyMd        String                  @map("body_md")
-  generatedBy   DescriptionGeneratedBy  @default(human) @map("generated_by")
-  approvedBy    String?                 @map("approved_by")
-  approvedAt    DateTime?               @map("approved_at")
-  createdAt     DateTime                @default(now()) @map("created_at")
+  id          String                 @id @default(cuid())
+  jobId       String                 @map("job_id")
+  version     Int
+  bodyMd      String                 @map("body_md")
+  generatedBy DescriptionGeneratedBy @default(human) @map("generated_by")
+  approvedBy  String?                @map("approved_by")
+  approvedAt  DateTime?              @map("approved_at")
+  createdAt   DateTime               @default(now()) @map("created_at")
 
-  job           Job                     @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  approver      User?                   @relation("ApprovedBy", fields: [approvedBy], references: [id])
+  job      Job   @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  approver User? @relation("ApprovedBy", fields: [approvedBy], references: [id])
 
   @@unique([jobId, version])
   @@map("job_descriptions")
@@ -529,8 +675,8 @@ model JobVersion {
   createdBy          String   @map("created_by")
   createdAt          DateTime @default(now()) @map("created_at")
 
-  job                Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  author             User     @relation("JobVersionAuthor", fields: [createdBy], references: [id])
+  job    Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  author User @relation("JobVersionAuthor", fields: [createdBy], references: [id])
 
   @@unique([jobId, version])
   @@map("job_versions")
@@ -551,17 +697,17 @@ enum JobPostStatus {
 }
 
 model JobPost {
-  id                    String          @id @default(cuid())
-  jobId                 String          @map("job_id")
-  channel               JobPostChannel
-  status                JobPostStatus   @default(pending)
-  externalRef           String?         @map("external_ref")
-  postedAt              DateTime?       @map("posted_at")
+  id                     String         @id @default(cuid())
+  jobId                  String         @map("job_id")
+  channel                JobPostChannel
+  status                 JobPostStatus  @default(pending)
+  externalRef            String?        @map("external_ref")
+  postedAt               DateTime?      @map("posted_at")
   includesPratibhaNumber Boolean        @default(true) @map("includes_pratibha_number")
-  errorDetail           String?         @map("error_detail")
-  createdAt             DateTime        @default(now()) @map("created_at")
+  errorDetail            String?        @map("error_detail")
+  createdAt              DateTime       @default(now()) @map("created_at")
 
-  job                   Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@map("job_posts")
 }
@@ -589,24 +735,24 @@ enum CandidateStatus {
 }
 
 model Candidate {
-  id                String   @id @default(cuid())
-  tenantId          String   @map("tenant_id")
-  jobId             String   @map("job_id")
-  name              String?
-  email             String?
-  phoneE164         String?  @map("phone_e164")
-  cvFileRef         String?  @map("cv_file_ref")
-  cvParsed          Json?    @map("cv_parsed")
-  sourceEmailMsgId  String?  @unique @map("source_email_msg_id")
-  parseFailed       Boolean  @default(false) @map("parse_failed")
-  noPhone           Boolean  @default(false) @map("no_phone")
+  id               String  @id @default(cuid())
+  tenantId         String  @map("tenant_id")
+  jobId            String  @map("job_id")
+  name             String?
+  email            String?
+  phoneE164        String? @map("phone_e164")
+  cvFileRef        String? @map("cv_file_ref")
+  cvParsed         Json?   @map("cv_parsed")
+  sourceEmailMsgId String? @unique @map("source_email_msg_id")
+  parseFailed      Boolean @default(false) @map("parse_failed")
+  noPhone          Boolean @default(false) @map("no_phone")
 
   /// Pipeline position. Automatic progression only moves forward and never
   /// overwrites a manual judgement - see `advanceCandidateStatus` in
   /// @pratibha/shared. Who changed it, from what and when lives in AuditLog
   /// under the `candidate.status` action, which is what the activity timeline
   /// renders.
-  status            CandidateStatus @default(inbox)
+  status CandidateStatus @default(inbox)
 
   /// How this candidate reached this job: 'auto' (matched by the router),
   /// 'fallback' (matched nothing, filed in the mailbox's fallback job),
@@ -619,13 +765,13 @@ model Candidate {
   routingConfidence Int?     @map("routing_confidence")
   createdAt         DateTime @default(now()) @map("created_at")
 
-  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  job               Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  screenings        Screening[]
-  notes             CandidateNote[]
-  shortlistItems    ShortlistItem[]
-  outreachEmails    OutreachEmail[]
-  interviewCalls    InterviewCall[]
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job            Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  screenings     Screening[]
+  notes          CandidateNote[]
+  shortlistItems ShortlistItem[]
+  outreachEmails OutreachEmail[]
+  interviewCalls InterviewCall[]
 
   @@unique([tenantId, jobId, phoneE164])
   @@index([tenantId, phoneE164])
@@ -641,15 +787,15 @@ model Candidate {
 /// hidden in the UI. A note is someone's own judgement of a person, and letting
 /// a colleague quietly rewrite it changes the record of who thought what.
 model CandidateNote {
-  id          String    @id @default(cuid())
-  candidateId String    @map("candidate_id")
-  authorId    String    @map("author_id")
+  id          String   @id @default(cuid())
+  candidateId String   @map("candidate_id")
+  authorId    String   @map("author_id")
   body        String
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
-  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
-  author      User      @relation("NoteAuthor", fields: [authorId], references: [id])
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  author    User      @relation("NoteAuthor", fields: [authorId], references: [id])
 
   @@index([candidateId, createdAt])
   @@map("candidate_notes")
@@ -661,21 +807,21 @@ enum ScreeningVerdict {
 }
 
 model Screening {
-  id                String            @id @default(cuid())
-  candidateId       String            @map("candidate_id")
-  score             Int
-  matchedMustHaves  Json              @map("matched_must_haves")
-  gaps              Json
-  model             String
-  tokensIn          Int               @map("tokens_in")
-  tokensOut         Int               @map("tokens_out")
-  costUsd           Float             @map("cost_usd")
-  verdict           ScreeningVerdict
-  reasonSummary     String            @map("reason_summary")
-  failed            Boolean           @default(false)
-  createdAt         DateTime          @default(now()) @map("created_at")
+  id               String           @id @default(cuid())
+  candidateId      String           @map("candidate_id")
+  score            Int
+  matchedMustHaves Json             @map("matched_must_haves")
+  gaps             Json
+  model            String
+  tokensIn         Int              @map("tokens_in")
+  tokensOut        Int              @map("tokens_out")
+  costUsd          Float            @map("cost_usd")
+  verdict          ScreeningVerdict
+  reasonSummary    String           @map("reason_summary")
+  failed           Boolean          @default(false)
+  createdAt        DateTime         @default(now()) @map("created_at")
 
-  candidate         Candidate         @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
   @@map("screenings")
 }
@@ -692,14 +838,14 @@ enum ShortlistStatus {
 }
 
 model Shortlist {
-  id          String          @id @default(cuid())
-  jobId       String          @map("job_id")
-  status      ShortlistStatus @default(draft)
-  createdAt   DateTime        @default(now()) @map("created_at")
+  id        String          @id @default(cuid())
+  jobId     String          @map("job_id")
+  status    ShortlistStatus @default(draft)
+  createdAt DateTime        @default(now()) @map("created_at")
 
-  job         Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  items       ShortlistItem[]
-  approvals   Approval[]
+  job       Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  items     ShortlistItem[]
+  approvals Approval[]
 
   @@map("shortlists")
 }
@@ -718,22 +864,22 @@ model ShortlistItem {
   finalState  ShortlistItemFinalState? @map("final_state")
   createdAt   DateTime                 @default(now()) @map("created_at")
 
-  shortlist   Shortlist                @relation(fields: [shortlistId], references: [id], onDelete: Cascade)
-  candidate   Candidate                @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  shortlist Shortlist @relation(fields: [shortlistId], references: [id], onDelete: Cascade)
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
   @@unique([shortlistId, candidateId])
   @@map("shortlist_items")
 }
 
 model Approval {
-  id            String    @id @default(cuid())
-  shortlistId   String    @map("shortlist_id")
-  approvedBy    String    @map("approved_by")
-  approvedAt    DateTime  @default(now()) @map("approved_at")
-  snapshot      Json
+  id          String   @id @default(cuid())
+  shortlistId String   @map("shortlist_id")
+  approvedBy  String   @map("approved_by")
+  approvedAt  DateTime @default(now()) @map("approved_at")
+  snapshot    Json
 
-  shortlist     Shortlist @relation(fields: [shortlistId], references: [id], onDelete: Cascade)
-  approver      User      @relation(fields: [approvedBy], references: [id])
+  shortlist      Shortlist       @relation(fields: [shortlistId], references: [id], onDelete: Cascade)
+  approver       User            @relation(fields: [approvedBy], references: [id])
   outreachEmails OutreachEmail[]
 
   @@map("approvals")
@@ -756,35 +902,35 @@ enum OutreachEmailStatus {
 }
 
 model OutreachTemplate {
-  id          String                  @id @default(cuid())
-  tenantId    String                  @map("tenant_id")
-  type        OutreachTemplateType
-  subject     String
-  bodyMd      String                  @map("body_md")
-  isDefault   Boolean                 @default(false) @map("is_default")
-  updatedBy   String?                 @map("updated_by")
-  createdAt   DateTime                @default(now()) @map("created_at")
+  id        String               @id @default(cuid())
+  tenantId  String               @map("tenant_id")
+  type      OutreachTemplateType
+  subject   String
+  bodyMd    String               @map("body_md")
+  isDefault Boolean              @default(false) @map("is_default")
+  updatedBy String?              @map("updated_by")
+  createdAt DateTime             @default(now()) @map("created_at")
 
-  tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  updater     User?                   @relation("UpdatedBy", fields: [updatedBy], references: [id])
-  emails      OutreachEmail[]
+  tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  updater User?           @relation("UpdatedBy", fields: [updatedBy], references: [id])
+  emails  OutreachEmail[]
 
   @@map("outreach_templates")
 }
 
 model OutreachEmail {
-  id            String                @id @default(cuid())
-  candidateId   String                @map("candidate_id")
-  templateId    String                @map("template_id")
-  renderedBody  String                @map("rendered_body")
-  sentAt        DateTime?             @map("sent_at")
-  status        OutreachEmailStatus?
-  approvalId    String                @map("approval_id")
-  createdAt     DateTime              @default(now()) @map("created_at")
+  id           String               @id @default(cuid())
+  candidateId  String               @map("candidate_id")
+  templateId   String               @map("template_id")
+  renderedBody String               @map("rendered_body")
+  sentAt       DateTime?            @map("sent_at")
+  status       OutreachEmailStatus?
+  approvalId   String               @map("approval_id")
+  createdAt    DateTime             @default(now()) @map("created_at")
 
-  candidate     Candidate             @relation(fields: [candidateId], references: [id], onDelete: Cascade)
-  template      OutreachTemplate      @relation(fields: [templateId], references: [id])
-  approval      Approval              @relation(fields: [approvalId], references: [id])
+  candidate Candidate        @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  template  OutreachTemplate @relation(fields: [templateId], references: [id])
+  approval  Approval         @relation(fields: [approvalId], references: [id])
 
   @@index([approvalId, candidateId])
   @@map("outreach_emails")
@@ -795,15 +941,15 @@ model OutreachEmail {
 // ---------------------------------------------------------------------------
 
 model CallWindow {
-  id          String   @id @default(cuid())
-  jobId       String   @map("job_id")
-  timezone    String
-  days        Json     // array of weekday numbers 0-6
-  startTime   String   @map("start_time") // HH:mm
-  endTime     String   @map("end_time")   // HH:mm
-  createdAt   DateTime @default(now()) @map("created_at")
+  id        String   @id @default(cuid())
+  jobId     String   @map("job_id")
+  timezone  String
+  days      Json // array of weekday numbers 0-6
+  startTime String   @map("start_time") // HH:mm
+  endTime   String   @map("end_time") // HH:mm
+  createdAt DateTime @default(now()) @map("created_at")
 
-  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@map("call_windows")
 }
@@ -820,30 +966,30 @@ enum InterviewDifficulty {
 }
 
 model InterviewProtocol {
-  id                String    @id @default(cuid())
-  tenantId          String    @map("tenant_id")
-  jobId             String?   @map("job_id") // null = tenant default
-  instructionText   String    @map("instruction_text")
+  id              String  @id @default(cuid())
+  tenantId        String  @map("tenant_id")
+  jobId           String? @map("job_id") // null = tenant default
+  instructionText String  @map("instruction_text")
 
   /// Wall-clock budget for the call. Enforced by the agent, not just requested
   /// in the prompt: a model asked to be brief is not a guarantee.
-  durationMinutes   Int                 @default(10) @map("duration_minutes")
-  difficulty        InterviewDifficulty @default(moderate)
-  minQuestions      Int                 @default(6) @map("min_questions")
-  maxQuestions      Int                 @default(10) @map("max_questions")
+  durationMinutes Int                 @default(10) @map("duration_minutes")
+  difficulty      InterviewDifficulty @default(moderate)
+  minQuestions    Int                 @default(6) @map("min_questions")
+  maxQuestions    Int                 @default(10) @map("max_questions")
   /// Optional list of topics to bias questions towards.
-  focusAreas        Json?               @map("focus_areas")
+  focusAreas      Json?               @map("focus_areas")
   /// What the agent calls itself, and the company it says it represents.
   /// Null falls back to the tenant name.
-  agentName         String?             @map("agent_name")
-  companyName       String?             @map("company_name")
-  version           Int
-  updatedBy         String?   @map("updated_by")
-  createdAt         DateTime  @default(now()) @map("created_at")
+  agentName       String?             @map("agent_name")
+  companyName     String?             @map("company_name")
+  version         Int
+  updatedBy       String?             @map("updated_by")
+  createdAt       DateTime            @default(now()) @map("created_at")
 
-  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  job               Job?      @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  updater           User?     @relation("UpdatedBy", fields: [updatedBy], references: [id])
+  tenant  Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job     Job?   @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  updater User?  @relation("UpdatedBy", fields: [updatedBy], references: [id])
 
   @@unique([tenantId, jobId])
   @@map("interview_protocols")
@@ -865,16 +1011,16 @@ enum InterviewCallStatus {
 }
 
 model InterviewCall {
-  id              String                @id @default(cuid())
-  candidateId     String                @map("candidate_id")
-  callerNumber    String                @map("caller_number")
-  recognised      Boolean               @default(false)
-  startedAt       DateTime              @default(now()) @map("started_at")
-  endedAt         DateTime?             @map("ended_at")
-  language        InterviewLanguage?
-  status          InterviewCallStatus?
-  recordingRef    String?               @map("recording_ref")
-  transcriptRef   String?               @map("transcript_ref")
+  id            String               @id @default(cuid())
+  candidateId   String               @map("candidate_id")
+  callerNumber  String               @map("caller_number")
+  recognised    Boolean              @default(false)
+  startedAt     DateTime             @default(now()) @map("started_at")
+  endedAt       DateTime?            @map("ended_at")
+  language      InterviewLanguage?
+  status        InterviewCallStatus?
+  recordingRef  String?              @map("recording_ref")
+  transcriptRef String?              @map("transcript_ref")
 
   /// The conversation itself: an ordered array of
   /// `{ speaker: 'pratibha' | 'candidate', text, atMs }`.
@@ -888,19 +1034,19 @@ model InterviewCall {
   /// When the first question was put. Billing runs from here, not from when
   /// the phone was answered: greeting, disclosure, identity and consent are
   /// deliberately not charged for, and that is what customers are told.
-  firstQuestionAt DateTime?             @map("first_question_at")
+  firstQuestionAt DateTime? @map("first_question_at")
   /// What this call was billed, in whole minutes. Stored rather than derived so
   /// an invoice can be reconciled against the call that produced it, even if
   /// the rounding rule changes later.
-  billableMinutes Int?                  @map("billable_minutes")
+  billableMinutes Int?      @map("billable_minutes")
 
-  telephonyCost   Float?                @map("telephony_cost")
-  llmCostUsd      Float?                @map("llm_cost_usd")
-  ttsCostUsd      Float?                @map("tts_cost_usd")
-  sttCostUsd      Float?                @map("stt_cost_usd")
-  createdAt       DateTime              @default(now()) @map("created_at")
+  telephonyCost Float?   @map("telephony_cost")
+  llmCostUsd    Float?   @map("llm_cost_usd")
+  ttsCostUsd    Float?   @map("tts_cost_usd")
+  sttCostUsd    Float?   @map("stt_cost_usd")
+  createdAt     DateTime @default(now()) @map("created_at")
 
-  candidate       Candidate             @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  candidate        Candidate         @relation(fields: [candidateId], references: [id], onDelete: Cascade)
   assessmentReport AssessmentReport?
 
   @@map("interview_calls")
@@ -914,15 +1060,15 @@ enum Recommendation {
 }
 
 model AssessmentReport {
-  id                String            @id @default(cuid())
-  interviewCallId   String            @unique @map("interview_call_id")
-  overallScore      Float             @map("overall_score")
-  recommendation    Recommendation
-  dimensions        Json
-  strengths         String[]
-  concerns          String[]
-  notableQuotes     Json              @map("notable_quotes")
-  generatedAt       DateTime          @default(now()) @map("generated_at")
+  id              String         @id @default(cuid())
+  interviewCallId String         @unique @map("interview_call_id")
+  overallScore    Float          @map("overall_score")
+  recommendation  Recommendation
+  dimensions      Json
+  strengths       String[]
+  concerns        String[]
+  notableQuotes   Json           @map("notable_quotes")
+  generatedAt     DateTime       @default(now()) @map("generated_at")
 
   // --- The report as the recruiter reads it -------------------------------
   //
@@ -933,23 +1079,23 @@ model AssessmentReport {
   // exactly the information a hiring manager needs and would lose.
 
   /// Section 1: how the interview itself went, 0-10.
-  interviewScore          Float?   @map("interview_score")
+  interviewScore          Float?  @map("interview_score")
   /// Why that score, written out. A number with no argument cannot be checked.
-  interviewScoreReasoning String?  @map("interview_score_reasoning")
+  interviewScoreReasoning String? @map("interview_score_reasoning")
 
   /// Section 2: question-and-answer pairs, derived from the stored transcript
   /// rather than asked of the model - the conversation is already on record,
   /// and regenerating it invites invented questions.
-  questionAnswers         Json?    @map("question_answers")
+  questionAnswers Json? @map("question_answers")
 
   /// Section 3: how this candidate fits this role's actual requirements.
-  jdFitSummary            String?  @map("jd_fit_summary")
+  jdFitSummary String? @map("jd_fit_summary")
 
   /// Section 4: the overall verdict, 0-10, across screening and interview.
-  recommendationScore     Float?   @map("recommendation_score")
-  recommendationVerdict   String?  @map("recommendation_verdict")
+  recommendationScore   Float?  @map("recommendation_score")
+  recommendationVerdict String? @map("recommendation_verdict")
 
-  interviewCall     InterviewCall     @relation(fields: [interviewCallId], references: [id], onDelete: Cascade)
+  interviewCall InterviewCall @relation(fields: [interviewCallId], references: [id], onDelete: Cascade)
 
   @@map("assessment_reports")
 }
@@ -959,22 +1105,22 @@ model AssessmentReport {
 // ---------------------------------------------------------------------------
 
 model UsageMeter {
-  id                  String   @id @default(cuid())
-  tenantId            String   @map("tenant_id")
-  period              String   // YYYY-MM
+  id                   String   @id @default(cuid())
+  tenantId             String   @map("tenant_id")
+  period               String // YYYY-MM
   /// Retained so historical periods still read correctly, and because the UI
   /// shows an approximate interview count beside the minutes. Not the quota.
-  interviewsUsed      Int      @default(0) @map("interviews_used")
+  interviewsUsed       Int      @default(0) @map("interviews_used")
   /// The quota that is actually enforced and billed. Pricing is per minute.
-  interviewMinutesUsed Int     @default(0) @map("interview_minutes_used")
-  screeningsUsed      Int      @default(0) @map("screenings_used")
-  overageInterviews   Int      @default(0) @map("overage_interviews")
-  overageMinutes      Int      @default(0) @map("overage_minutes")
-  overageScreenings   Int      @default(0) @map("overage_screenings")
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  interviewMinutesUsed Int      @default(0) @map("interview_minutes_used")
+  screeningsUsed       Int      @default(0) @map("screenings_used")
+  overageInterviews    Int      @default(0) @map("overage_interviews")
+  overageMinutes       Int      @default(0) @map("overage_minutes")
+  overageScreenings    Int      @default(0) @map("overage_screenings")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
 
-  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, period])
   @@map("usage_meters")
@@ -1005,20 +1151,241 @@ model PromptTemplate {
 }
 
 model AuditLog {
-  id        String    @id @default(cuid())
-  tenantId  String    @map("tenant_id")
-  actor     String    // user_id | system | platform_admin
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  actor     String // user_id | system | platform_admin
   action    String
   entity    String
-  entityId  String    @map("entity_id")
+  entityId  String   @map("entity_id")
   before    Json?
   after     Json?
   reason    String?
-  createdAt DateTime  @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
-  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])
   @@index([action, entity])
   @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Admin panel
+//
+// A separate app with its own users, sessions and database role. None of these
+// tables is readable by the portal's role (pratibha_app): the migration revokes
+// it, so even a compromised portal session cannot reach an admin row.
+// ---------------------------------------------------------------------------
+
+enum AdminRole {
+  owner
+  engineer
+  support
+}
+
+model AdminUser {
+  id              String    @id @default(cuid())
+  name            String
+  email           String    @unique
+  /// scrypt. Null until the invite is accepted.
+  passwordHash    String?   @map("password_hash")
+  role            AdminRole
+  /// TOTP secret, sealed with ADMIN_SECRET_KEY. Null until enrolled.
+  totpSecret      String?   @map("totp_secret")
+  totpEnabledAt   DateTime? @map("totp_enabled_at")
+  lastActiveAt    DateTime? @map("last_active_at")
+  inviteTokenHash String?   @unique @map("invite_token_hash")
+  inviteExpiresAt DateTime? @map("invite_expires_at")
+  invitedBy       String?   @map("invited_by")
+  deactivatedAt   DateTime? @map("deactivated_at")
+  deactivatedBy   String?   @map("deactivated_by")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  sessions AdminSession[]
+
+  @@map("admin_users")
+}
+
+enum AdminSessionStage {
+  /// Password accepted, two step code still owed.
+  awaiting_code
+  active
+}
+
+/// One signed-in browser. The cookie carries a random token; only its hash is
+/// stored, and the row is checked on every request, so revoking it (or
+/// deactivating the admin) ends the session on the next click.
+model AdminSession {
+  id             String            @id @default(cuid())
+  adminUserId    String            @map("admin_user_id")
+  tokenHash      String            @unique @map("token_hash")
+  stage          AdminSessionStage @default(awaiting_code)
+  /// When a two step code was last entered in this session. Sign in as needs
+  /// it to be recent, not merely enrolled.
+  codeVerifiedAt DateTime?         @map("code_verified_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  lastSeenAt     DateTime          @default(now()) @map("last_seen_at")
+  expiresAt      DateTime          @map("expires_at")
+  revokedAt      DateTime?         @map("revoked_at")
+  ip             String?
+  userAgent      String?           @map("user_agent")
+
+  admin AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  @@index([adminUserId])
+  @@map("admin_sessions")
+}
+
+enum PaymentKind {
+  subscription
+  top_up
+  goodwill
+  refund
+}
+
+enum PaymentStatus {
+  captured
+  failed
+  refunded
+  scheduled_retry
+}
+
+/// The ledger. Complete from day one: until a gateway exists, every charge is
+/// recorded here by an admin, with the method and who recorded it.
+///
+/// Money in paise, as integers. Rows outlive the workspace's hiring data:
+/// erasure keeps the tenant row as a tombstone precisely so these survive.
+model Payment {
+  id            String        @id @default(cuid())
+  tenantId      String        @map("tenant_id")
+  kind          PaymentKind
+  /// What was paid, after any coupon, before tax.
+  amountPaise   Int           @map("amount_paise")
+  /// upi | card | bank_transfer | cash | cheque | none
+  method        String
+  status        PaymentStatus
+  /// The "For" column: "Growth monthly", "Top up 100 minutes".
+  description   String
+  planId        String?       @map("plan_id")
+  packId        String?       @map("pack_id")
+  /// Minutes or screenings this row granted, for top ups and goodwill.
+  minutes       Int?
+  screenings    Int?
+  invoiceId     String?       @unique @map("invoice_id")
+  couponId      String?       @map("coupon_id")
+  discountPaise Int           @default(0) @map("discount_paise")
+  /// For a refund row: the payment it refunds.
+  refundOfId    String?       @map("refund_of_id")
+  /// Typed reason: required for goodwill and refunds.
+  reason        String?
+  /// When the next retry runs, for failed and scheduled_retry rows.
+  retryAt       DateTime?     @map("retry_at")
+  /// The UPI or bank reference, when there is one.
+  reference     String?
+  /// The admin who recorded it, for manual rows. Null means the system.
+  recordedBy    String?       @map("recorded_by")
+  paidAt        DateTime      @default(now()) @map("paid_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  invoice    Invoice?          @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  redemption CouponRedemption?
+
+  @@index([tenantId, paidAt])
+  @@index([status, paidAt])
+  @@map("payments")
+}
+
+enum ActorType {
+  admin
+  workspace
+  system
+}
+
+/// Who did what, across admins and workspaces.
+///
+/// Append only: a trigger refuses every UPDATE, DELETE and TRUNCATE, and no
+/// role is granted either privilege. No foreign keys, so a row about a
+/// workspace survives that workspace's erasure. Workspace rows are mirrored in
+/// from audit_logs by trigger, so the portal needs no new code to appear here.
+model ActivityLog {
+  id                  BigInt    @id @default(autoincrement())
+  at                  DateTime  @default(now())
+  actorType           ActorType @map("actor_type")
+  actorId             String?   @map("actor_id")
+  /// Snapshotted, so the log still reads after a name change or erasure.
+  actorName           String?   @map("actor_name")
+  action              String
+  /// One readable sentence: "Deepak granted 50 goodwill minutes".
+  summary             String
+  targetWorkspaceId   String?   @map("target_workspace_id")
+  targetWorkspaceName String?   @map("target_workspace_name")
+  reason              String?
+  before              Json?
+  after               Json?
+
+  @@index([at])
+  @@index([targetWorkspaceId, at])
+  @@index([actorType, at])
+  @@index([action])
+  @@map("activity_log")
+}
+
+/// Usage per workspace per day (Asia/Kolkata), maintained by triggers on
+/// usage_meters and interview_calls so it moves exactly with the meter and
+/// survives candidate deletion. The dashboard reads only this.
+model UsageDaily {
+  tenantId             String   @map("tenant_id")
+  day                  DateTime @db.Date
+  minutes              Int      @default(0)
+  screenings           Int      @default(0)
+  /// Billed interviews, the same count the meter keeps.
+  interviews           Int      @default(0)
+  callsCompleted       Int      @default(0) @map("calls_completed")
+  callsNoShow          Int      @default(0) @map("calls_no_show")
+  callsDropped         Int      @default(0) @map("calls_dropped")
+  callsOutOfWindow     Int      @default(0) @map("calls_out_of_window")
+  callsDeclinedConsent Int      @default(0) @map("calls_declined_consent")
+  callsUnknownCaller   Int      @default(0) @map("calls_unknown_caller")
+
+  @@id([tenantId, day])
+  @@index([day])
+  @@map("usage_daily")
+}
+
+/// A call that matched no invitation, and why. Written by the worker.
+model UnknownCall {
+  id              String   @id @default(cuid())
+  callerNumber    String   @map("caller_number")
+  at              DateTime @default(now())
+  /// no_match | email_no_match | identity_failed | not_approved | silent | workspace_paused
+  reasonCode      String   @map("reason_code")
+  /// The sentence shown in the admin Calls page.
+  reason          String
+  /// Set when part of the call did match a workspace (a reference code, an
+  /// email), so the admin can open it there.
+  tenantId        String?  @map("tenant_id")
+  candidateId     String?  @map("candidate_id")
+  interviewCallId String?  @map("interview_call_id")
+
+  @@index([callerNumber, at])
+  @@index([at])
+  @@map("unknown_calls")
+}
+
+/// Numbers refused at the line, before the agent answers.
+model BlockedNumber {
+  id          String    @id @default(cuid())
+  phoneE164   String    @map("phone_e164")
+  reason      String
+  blockedBy   String    @map("blocked_by")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  /// Calls refused since the block, so it can be seen working.
+  hits        Int       @default(0)
+  lastHitAt   DateTime? @map("last_hit_at")
+  unblockedAt DateTime? @map("unblocked_at")
+  unblockedBy String?   @map("unblocked_by")
+
+  @@index([phoneE164])
+  @@map("blocked_numbers")
 }

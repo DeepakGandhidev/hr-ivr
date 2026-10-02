@@ -1,7 +1,30 @@
-import { PLANS, TRIAL_DAYS, approximateInterviews, quotaState } from "@pratibha/shared";
-import type { TenantTransactionClient } from "@/lib/authz";
+import { approximateInterviews, quotaState } from "@pratibha/shared";
+import type { TenantTransactionClient, TenantWithPlan } from "@/lib/authz";
 import { currentUsagePeriod, interviewMinuteLimit } from "@/lib/billing";
-import type { Tenant } from "@pratibha/prisma";
+import { livePacks, trialAllowance } from "@/lib/pricing";
+import type { Plan, Tenant } from "@pratibha/prisma";
+
+/**
+ * A plan row as the Subscription page reads it. `limits` keeps the shape the
+ * page has always used; `slashedPriceInr` is display only and is never what is
+ * charged.
+ */
+export function planView(plan: Plan) {
+  return {
+    id: plan.id,
+    key: plan.key,
+    name: plan.name,
+    version: plan.version,
+    priceInr: plan.priceInr,
+    slashedPriceInr: plan.slashedPriceInr,
+    limits: {
+      roles: plan.jobLimit,
+      interviews: approximateInterviews(plan.minutes),
+      interviewMinutes: plan.minutes,
+      screenings: plan.screenings,
+    },
+  };
+}
 
 /**
  * The subscription row, created on first sight.
@@ -57,7 +80,7 @@ export function daysRemaining(periodEnd: Date, now: Date = new Date()): number {
  */
 export async function subscriptionOverview(
   tx: TenantTransactionClient,
-  tenant: Tenant
+  tenant: TenantWithPlan
 ) {
   const subscription = await getOrCreateSubscription(tx, tenant);
 
@@ -70,18 +93,10 @@ export async function subscriptionOverview(
   const used = meter?.interviewMinutesUsed ?? 0;
   const state = quotaState(used, limit);
 
-  const plan = PLANS[subscription.planId as keyof typeof PLANS] ?? null;
-
   return {
     subscription,
-    plan: plan
-      ? {
-          id: plan.id,
-          name: plan.name,
-          priceInr: plan.priceInr,
-          limits: plan.limits,
-        }
-      : null,
+    // The workspace's own plan version, which a later price change does not move.
+    plan: tenant.plan ? planView(tenant.plan) : null,
     minutes: {
       ...state,
       planMinutes: planLimit,
@@ -92,7 +107,7 @@ export async function subscriptionOverview(
     screeningsUsed: meter?.screeningsUsed ?? 0,
     overageMinutes: meter?.overageMinutes ?? 0,
     daysRemaining: daysRemaining(subscription.periodEnd),
-    trialDays: TRIAL_DAYS,
+    trialDays: trialAllowance(tenant.trial).days,
   };
 }
 
@@ -104,10 +119,10 @@ export async function subscriptionOverview(
  * customer below what they have already used this period. That case is called
  * out rather than discovered at the next failed interview.
  */
-export function planComparison(currentPlanId: string, targetPlanId: string, minutesUsed: number) {
-  const current = PLANS[currentPlanId as keyof typeof PLANS] ?? null;
-  const target = PLANS[targetPlanId as keyof typeof PLANS] ?? null;
-  if (!target) return null;
+export function planComparison(currentPlan: Plan | null, targetPlan: Plan | null, minutesUsed: number) {
+  if (!targetPlan) return null;
+  const current = currentPlan ? planView(currentPlan) : null;
+  const target = planView(targetPlan);
 
   const direction =
     !current || target.priceInr > current.priceInr
@@ -118,10 +133,8 @@ export function planComparison(currentPlanId: string, targetPlanId: string, minu
 
   return {
     direction,
-    target: { id: target.id, name: target.name, priceInr: target.priceInr, limits: target.limits },
-    current: current
-      ? { id: current.id, name: current.name, priceInr: current.priceInr, limits: current.limits }
-      : null,
+    target,
+    current,
     changes: {
       minutes: target.limits.interviewMinutes - (current?.limits.interviewMinutes ?? 0),
       screenings: target.limits.screenings - (current?.limits.screenings ?? 0),
@@ -136,12 +149,22 @@ export function planComparison(currentPlanId: string, targetPlanId: string, minu
   };
 }
 
-/** Minute packs. Priced from the overage rate, so buying ahead is never dearer. */
-export const TOP_UP_PACKS = [
-  { minutes: 100, pricePaise: 120_000 },
-  { minutes: 300, pricePaise: 330_000 },
-  { minutes: 1000, pricePaise: 1_000_000 },
-] as const;
+/**
+ * Top up packs on sale, as published in the admin panel. The Subscription
+ * page offers exactly these, so its offers cannot drift from the packs table.
+ */
+export async function topUpPacks(tx: TenantTransactionClient) {
+  const packs = await livePacks(tx);
+  return packs.map((p) => ({
+    id: p.id,
+    kind: p.kind,
+    quantity: p.quantity,
+    // Kept for the page's minute packs, which predate screening packs.
+    minutes: p.kind === "minutes" ? p.quantity : 0,
+    pricePaise: p.priceInr * 100,
+    validityDays: p.validityDays,
+  }));
+}
 
 /**
  * The reasons offered on the way out.

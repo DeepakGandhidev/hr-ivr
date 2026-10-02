@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import Time from "@/components/Time";
 import Transcript, { type TranscriptTurn } from "@/components/Transcript";
 
 interface Call {
@@ -202,7 +203,7 @@ export default function CallsPage({ params }: { params: { tenant: string } }) {
               <tbody>
                 {data.calls.map((c) => (
                   <tr key={c.id}>
-                    <td>{new Date(c.startedAt).toLocaleString()}</td>
+                    <td><Time value={c.startedAt} /></td>
                     <td className="role">
                       <Link href={`/${tenant}/candidates/${c.candidate.id}`} style={{ color: "inherit" }}>
                         {c.candidate.name ?? c.candidate.email ?? "Unnamed"}
@@ -262,7 +263,7 @@ export default function CallsPage({ params }: { params: { tenant: string } }) {
                 <strong>{viewing.candidate.name ?? viewing.candidate.email ?? "Candidate"}</strong>
                 <div className="subtle">
                   {viewing.candidate.job.title} ·{" "}
-                  {new Date(viewing.startedAt).toLocaleString()}
+                  <Time value={viewing.startedAt} />
                 </div>
               </div>
               <button

@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { adminPrisma } from "@pratibha/prisma";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/authz";
 
 export async function GET() {
-  const supabase = createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  // Shared with every tenant route, so a cookie session and a mobile bearer
+  // token resolve the same way here as everywhere else.
+  const user = await getSessionUser();
 
   if (!user) {
     return NextResponse.json({ user: null }, { status: 401 });

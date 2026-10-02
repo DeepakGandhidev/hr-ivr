@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Dialog from "@/components/Dialog";
 import { recommendationChip } from "@/components/JobShell";
-import Markdown, { truncateEnd } from "@/components/Markdown";
+import Markdown, { markdownToPlain, truncateEnd } from "@/components/Markdown";
 import Time from "@/components/Time";
 import Transcript, { type TranscriptTurn } from "@/components/Transcript";
 import { callMinutes, plural } from "@/lib/format";
@@ -272,10 +272,10 @@ export default function InterviewReport({
                 <span className={`chip sm chip-${FIT_CHIP[f.status].tone}`}>{FIT_CHIP[f.status].label}</span>
                 <span>
                   <strong>
-                    {f.requirement.replace(/[.\s]+$/, "")}
+                    {markdownToPlain(f.requirement).replace(/[.\s]+$/, "")}
                     {f.kind === "good" ? ", good to have" : ""}.
                   </strong>{" "}
-                  {f.evidence}
+                  <Markdown source={f.evidence} inline />
                 </span>
               </li>
             ))}

@@ -34,5 +34,6 @@ packages/shared/dist/
 # Local dev process logs
 .dev-logs/
 
-# Docker dev env (real keys)
-.env.docker
+# Working documents kept beside the code, not part of it
+Pratibha Jobs page redesign*.html
+new.md

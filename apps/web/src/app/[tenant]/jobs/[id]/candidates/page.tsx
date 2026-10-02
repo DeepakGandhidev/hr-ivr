@@ -200,6 +200,10 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
   }
 
   const threshold = summary?.config.scoreThreshold ?? 70;
+  // Suggested is the score against today's threshold (the job's own, or the
+  // platform setting), not the verdict stored when the CV was screened, so a
+  // threshold change in the admin panel moves the chips without re-screening.
+  const suggested = (s: { score: number; failed?: boolean } | null | undefined) => Boolean(s && !s.failed && s.score >= threshold);
   const perms = summary?.permissions;
   const waiting = summary?.counts.awaitingApproval ?? 0;
 
@@ -409,7 +413,7 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
                   }
                 } else if (onShortlist) {
                   primary = <span className="row-state">{approved ? "Approved" : "On shortlist"}</span>;
-                } else if (latest.verdict === "shortlist" && perms?.canEditShortlist) {
+                } else if (suggested(latest) && perms?.canEditShortlist) {
                   primary = (
                     <button
                       type="button"
@@ -442,7 +446,7 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
                         },
                       ]
                     : []),
-                  ...(perms?.canEditShortlist && latest && !onShortlist && latest.verdict !== "shortlist"
+                  ...(perms?.canEditShortlist && latest && !onShortlist && !suggested(latest)
                     ? [{ label: "Add to shortlist", onSelect: () => toggleShortlist(candidate, true) }]
                     : []),
                   ...(perms?.canEditShortlist && onShortlist && !approved
@@ -499,10 +503,10 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
                       ) : (
                         <span
                           className={`chip ${
-                            latest?.verdict === "shortlist" ? "chip-green" : "chip-neutral"
+                            suggested(latest) ? "chip-green" : "chip-neutral"
                           }`}
                         >
-                          {verdictLabel(latest?.verdict)}
+                          {verdictLabel(latest ? (suggested(latest) ? "shortlist" : "archive") : null)}
                         </span>
                       )}
                     </td>

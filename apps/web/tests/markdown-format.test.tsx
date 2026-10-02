@@ -114,3 +114,57 @@ describe("J05 pluralization and timestamps", () => {
     expect(describeCallWindows([])).toBe("any time the line is open");
   });
 });
+
+describe("J01 existing data: shapes stored JDs and reports actually take", () => {
+  it("unwraps a JD the model returned inside a markdown code fence", () => {
+    const src = "```markdown\n## About the role\n- **Sell** AI agents\n```";
+    const out = html(src);
+    expect(out).toContain("<h3>About the role</h3>");
+    expect(out).toContain("<strong>Sell</strong>");
+    expect(out).not.toContain("<pre>");
+    expect(visible(src)).not.toMatch(/```|#|\*\*/);
+  });
+
+  it("unwraps an untagged fence only when it wraps the whole document", () => {
+    expect(html("```\n## Title\n```")).toContain("<h3>Title</h3>");
+    expect(html("Intro\n\n```\nnpm run build\n```")).toContain("<pre><code>npm run build</code></pre>");
+  });
+
+  it("renders a setext heading instead of a row of equals signs", () => {
+    const out = html("About the role\n==============\nBody text");
+    expect(out).toContain("<h3>About the role</h3>");
+    expect(visible("About the role\n====\nBody")).not.toContain("==");
+  });
+
+  it("handles strikethrough, images and autolinks without leaving syntax", () => {
+    const out = html("~~old~~ new ![logo](https://x.test/a.png) <https://pratibha.tech>");
+    expect(out).toContain("<del>old</del>");
+    expect(out).not.toContain("<img");
+    expect(out).toContain('href="https://pratibha.tech"');
+    expect(visible("~~old~~ ![logo](https://x.test/a.png) <https://pratibha.tech>")).not.toMatch(/~~|!\[|\]\(|&lt;https/);
+  });
+
+  it("treats <br> tags and doubly escaped newlines as line breaks", () => {
+    expect(visible("Location: Gurugram<br>Experience: 5 years")).not.toContain("<br");
+    expect(html("Location: Gurugram<br/>Experience: 5 years")).toContain("<br/>");
+    const escaped = "## About\\n- one\\n- two";
+    expect(html(escaped)).toContain("<h3>About</h3>");
+    expect(html(escaped)).toContain("<li>two</li>");
+  });
+
+  it("gives the same shapes as plain text for previews", () => {
+    expect(markdownToPlain("```markdown\n## Title\n~~old~~ ![a](https://x/a.png) <https://p.tech>\n```")).toBe(
+      "Title\nold a https://p.tech"
+    );
+    expect(markdownToPlain("Heading\n=====\nBody")).toBe("Heading\nBody");
+  });
+});
+
+describe("J01 headings without eating hashtags", () => {
+  it("keeps #hashtags as text but still reads ##Heading", () => {
+    expect(html("#hiring #sales")).not.toContain("<h3>");
+    expect(visible("#hiring #sales")).toContain("#hiring #sales");
+    expect(html("##About the role")).toContain("<h3>About the role</h3>");
+    expect(markdownToPlain("#hiring\n## Role")).toBe("#hiring\nRole");
+  });
+});

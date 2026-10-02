@@ -11,7 +11,9 @@ import {
   recordInterviewCall,
   updateInterviewCall,
   incrementInterviewUsage,
+  recordUnknownCall,
 } from '../db/index.js';
+import { isTenantPaused } from './tenantStatus.js';
 
 /**
  * How far past its budget an interview may run before it is ended for it.
@@ -78,7 +80,10 @@ export class CallSession {
     // Caller recognition replaces the old reference-code gate.
     const lookup = await this.#recogniseCaller(session.callerNumber);
 
-    this.stt.on('final', (text) => this.#onFinal(text));
+    this.stt.on('final', (text) => {
+      session.heardCaller = true;
+      this.#onFinal(text);
+    });
     this.stt.on('partial', (text) => {
       this.lastVoiceAt = Date.now();
       session.transcript?.record('caller.interim', { text });
@@ -106,6 +111,22 @@ export class CallSession {
       }
       if (Date.now() - this.lastVoiceAt > IDLE_HANGUP_MS) this.finalise(TERMINAL.ABANDONED);
     }, 5000);
+
+    // A workspace an admin has suspended (or is deleting) takes no interviews:
+    // the caller hears a polite refusal, nothing is recorded against the
+    // workspace and nothing is billed. The admin's unknown caller log notes it.
+    if (lookup?.tenant && isTenantPaused(lookup.tenant)) {
+      session.unknownReason = {
+        reasonCode: 'workspace_paused',
+        reason: `Matched ${lookup.tenant.name}, which is paused, so the caller heard the polite refusal`,
+        tenantId: lookup.tenant.id,
+        candidateId: lookup.candidate?.id ?? null,
+      };
+      session.setState(STATES.CLOSE);
+      session.finish(TERMINAL.UNKNOWN_CALLER);
+      await this.#say(PAUSED_REFUSAL);
+      return;
+    }
 
     // Both of the turn-aways below used to return before any call record was
     // written, so an out-of-window or repeat caller left no trace at all - the
@@ -557,6 +578,24 @@ export class CallSession {
       }
     }
 
+    // Strays: anyone the line could not match to an invitation, with the
+    // reason, for the admin panel's unknown caller log. Never billed.
+    const stray =
+      session.outcome === TERMINAL.UNKNOWN_CALLER ||
+      (!session.candidate && session.outcome !== TERMINAL.TECHNICAL_FAILURE && session.outcome !== TERMINAL.OUT_OF_WINDOW);
+    if (stray) {
+      const why = session.unknownReason ?? (session.heardCaller
+        ? { reasonCode: 'no_match', reason: 'No invitation on this number and no reference code given' }
+        : { reasonCode: 'silent', reason: 'Silent line, nothing said' });
+      await recordUnknownCall({
+        callerNumber: session.callerNumber,
+        tenantId: session.tenant?.id ?? null,
+        candidateId: session.candidate?.id ?? null,
+        interviewCallId: session.interviewCallId ?? null,
+        ...why,
+      }).catch(err => this.logger.error({ err: err.message }, 'Unknown call log failed'));
+    }
+
     if (producesReport) {
       this.analyst.analyse(session).catch(err =>
         this.logger.error({ err: err.message, sessionId: session.id }, 'Post-call analysis failed'));
@@ -579,6 +618,10 @@ export class CallSession {
  * barge-in cancels the model call, and that must not be reported to the
  * candidate as a technical failure.
  */
+/** What a caller to a suspended workspace hears. Not the tenant notice: candidates are not told why. */
+export const PAUSED_REFUSAL =
+  "Thank you for calling. Interviews for this role are paused at the moment, so we can't go ahead today. The team will be in touch by email.";
+
 export function isAbortError(err) {
   const name = err?.name ?? '';
   return name === 'AbortError' || name === 'APIUserAbortError' || err?.code === 'ABORT_ERR';

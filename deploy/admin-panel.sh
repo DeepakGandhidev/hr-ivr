@@ -73,7 +73,7 @@ say "2/8  Code"
 rsync -az --no-owner --no-group \
   --exclude node_modules --exclude .next --exclude .git --exclude '.env*' --exclude '*.tsbuildinfo' \
   --exclude .dev-logs --exclude 'src/generated' --exclude '.DS_Store' --exclude 'supabase/.temp' \
-  --exclude 'Pratibha Jobs page redesign*' --exclude new.md \
+  --exclude 'Pratibha Jobs page redesign*' --exclude 'new*.md' \
   ./ "$HOST_SSH:$APP_DIR/"
 
 say "3/8  Install, generate, migrate"

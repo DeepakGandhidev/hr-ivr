@@ -24,16 +24,13 @@ const patchSchema = z.object({
  * role's candidate list routinely contains people who applied for something
  * else. Until now the only way to correct that was in the database.
  *
- * Moving is not just an update to job_id. A screening scores a CV against one
- * job's must-haves, and a shortlist belongs to one job — carried across, both
- * become confident statements about the wrong role, and the shortlist is what
- * clears someone to be interviewed. So the job-scoped judgements are removed
- * and the candidate arrives unscreened, which is the truth: nobody has assessed
- * them for this role yet.
- *
- * The screening rows are deleted rather than kept for history because they
- * drive live decisions. Billing is unaffected: the meter that counts screenings
- * is usage_meters, and it is not touched.
+ * Moving keeps the candidate's history (Batch 7, PL60): the old screening
+ * stays, tied to the job it was run against, and stops counting as current.
+ * Placement on the old job's shortlist goes, because a shortlist belongs to one
+ * job and is what clears someone to be interviewed. The candidate arrives as
+ * Inbox for the new role and is screened against its JD: queued at once in
+ * Auto mode, Awaiting screen in Manual. Interview history stays attached.
+ * Billing is unaffected by the move itself: the meter is usage_meters.
  */
 export async function PATCH(
   request: NextRequest,
@@ -79,19 +76,12 @@ export async function PATCH(
         }
       }
 
-      const removedScreenings = await db.screening.findMany({
-        where: { candidateId: id },
-        select: { id: true, score: true, verdict: true },
-      });
-
       // Shortlists belong to a job, so placement on the old job's shortlist has
       // to go with the move — otherwise the candidate stays approved to
       // interview for a role they are no longer applying to.
       await db.shortlistItem.deleteMany({
         where: { candidateId: id, shortlist: { jobId: candidate.jobId } },
       });
-      await db.screening.deleteMany({ where: { candidateId: id } });
-
       const updated = await db.candidate.update({
         where: { id },
         data: {
@@ -100,6 +90,9 @@ export async function PATCH(
           // than still claiming the router matched them.
           routedBy: "manual",
           routingConfidence: null,
+          // Nobody has assessed them for this role yet.
+          status: "inbox",
+          screeningQueuedAt: ctx.tenant.screeningMode === "auto" ? new Date() : null,
         },
       });
 
@@ -113,8 +106,7 @@ export async function PATCH(
         after: {
           jobId: job.id,
           jobTitle: job.title,
-          discardedScreenings: removedScreenings.length,
-          discardedScores: removedScreenings.map((s) => s.score),
+          screening: ctx.tenant.screeningMode === "auto" ? "queued" : "awaiting",
         },
       }).catch((error) => console.error("Failed to audit candidate move", error));
 
@@ -122,7 +114,7 @@ export async function PATCH(
         candidate: updated,
         moved: true,
         movedTo: job.title,
-        discardedScreenings: removedScreenings.length,
+        screening: ctx.tenant.screeningMode === "auto" ? "queued" : "awaiting",
       });
     });
   });

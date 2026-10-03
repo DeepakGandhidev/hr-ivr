@@ -11,6 +11,7 @@ import { authorizeTenant, withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { ingestCvFile, ingestManualCandidate, type IngestFileResult } from "@/lib/cv-intake";
 import { z } from "zod";
+import { ACTIVE_CANDIDATE } from "@/lib/candidates";
 
 /**
  * pdf-parse loads pdf.js, which reaches for Node built-ins and its own worker.
@@ -40,10 +41,14 @@ export async function GET(
 
     return withTenantAuth(tenant, Action.candidateRead, async (_ctx, tx) => {
       const candidates = await tx.candidate.findMany({
-        where: { jobId: query.data.jobId },
+        // Archived and not-an-application candidates live only in the
+        // Pipeline's own filters (Batch 7).
+        where: { jobId: query.data.jobId, ...ACTIVE_CANDIDATE },
         orderBy: { createdAt: "desc" },
         include: {
-          screenings: { orderBy: { createdAt: "desc" }, take: 1 },
+          // The screening for THIS job: one from a role they were moved off
+          // stays in their history, not here.
+          screenings: { where: { jobId: query.data.jobId }, orderBy: { createdAt: "desc" }, take: 1 },
           shortlistItems: { include: { shortlist: true } },
           // Whether an interview report exists, so the row can open it.
           interviewCalls: {

@@ -1,5 +1,6 @@
 import { DEFAULT_SCREENING_THRESHOLD, SUPPORTED_LANGUAGES } from "@pratibha/shared";
 import { planClearsGate, platformSettings } from "@/lib/platform-settings";
+import { ACTIVE_CANDIDATE } from "@/lib/candidates";
 import type { TenantTransactionClient } from "@/lib/authz";
 import { describeCallWindows } from "@/lib/format";
 
@@ -21,10 +22,11 @@ type Tx = TenantTransactionClient;
 /** Scope a funnel count to one job, several jobs, or a whole tenant. */
 export type FunnelScope = { jobId: string } | { jobIds: string[] } | { tenantId: string };
 
+// Archived and not-an-application candidates count nowhere (Batch 7).
 function candidateScope(scope: FunnelScope) {
-  if ("jobId" in scope) return { jobId: scope.jobId };
-  if ("jobIds" in scope) return { jobId: { in: scope.jobIds } };
-  return { tenantId: scope.tenantId };
+  if ("jobId" in scope) return { jobId: scope.jobId, ...ACTIVE_CANDIDATE };
+  if ("jobIds" in scope) return { jobId: { in: scope.jobIds }, ...ACTIVE_CANDIDATE };
+  return { tenantId: scope.tenantId, ...ACTIVE_CANDIDATE };
 }
 
 /**

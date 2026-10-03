@@ -3,6 +3,7 @@ import { Action, NotFoundError, updateShortlistSchema, ValidationError, advanceC
 import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { z } from "zod";
+import { ACTIVE_CANDIDATE } from "@/lib/candidates";
 
 const querySchema = z.object({
   jobId: z.string().min(1),
@@ -38,6 +39,7 @@ export async function GET(
               include: { approver: { select: { id: true, name: true, email: true } } },
             },
             items: {
+              where: { candidate: ACTIVE_CANDIDATE },
               orderBy: { createdAt: "asc" },
               include: {
                 candidate: {
@@ -47,7 +49,7 @@ export async function GET(
                     email: true,
                     phoneE164: true,
                     status: true,
-                    screenings: { orderBy: { createdAt: "desc" }, take: 1 },
+                    screenings: { where: { jobId: query.data.jobId }, orderBy: { createdAt: "desc" }, take: 1 },
                     // Enough to say whether an invitation went out under an
                     // approval. The email body itself is never selected.
                     outreachEmails: {

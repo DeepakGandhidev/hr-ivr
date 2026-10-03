@@ -438,16 +438,21 @@ model Tenant {
 
   /// Who last moved `status`, and when: 'admin:<id>', 'system', or
   /// 'workspace:<userId>'.
-  statusChangedBy     String?       @map("status_changed_by")
-  statusChangedAt     DateTime?     @map("status_changed_at")
+  statusChangedBy        String?       @map("status_changed_by")
+  statusChangedAt        DateTime?     @map("status_changed_at")
   /// What Suspend or Delete moved the workspace away from, so Resume and
   /// Restore return it exactly as it was.
-  previousStatus      TenantStatus? @map("previous_status")
+  previousStatus         TenantStatus? @map("previous_status")
   /// The first admin's deletion request, waiting for a second admin.
-  deletionRequestedBy String?       @map("deletion_requested_by")
-  deletionRequestedAt DateTime?     @map("deletion_requested_at")
+  deletionRequestedBy    String?       @map("deletion_requested_by")
+  deletionRequestedAt    DateTime?     @map("deletion_requested_at")
   /// End of the 30 day hold. Erasure runs only after this.
-  deletionHoldUntil   DateTime?     @map("deletion_hold_until")
+  deletionHoldUntil      DateTime?     @map("deletion_hold_until")
+  /// Batch 7, PL10: auto screens matched arrivals; manual queues them.
+  screeningMode          ScreeningMode @default(manual) @map("screening_mode")
+  /// When the mode last changed. Auto mode only screens arrivals after this,
+  /// so switching to auto never retroactively screens the manual queue.
+  screeningModeChangedAt DateTime?     @map("screening_mode_changed_at")
 
   companyProfile CompanyProfile?
   assets         TenantAsset[]
@@ -730,6 +735,20 @@ model JobPost {
 /// The first four are reached on their own as those events happen. The last
 /// three are judgements and are only ever set by a person - nothing in the
 /// system infers that someone was hired.
+/// Where a candidate's displayed name came from (Batch 7, PL90): the CV text
+/// first, the email sender's display name second, the subject line last.
+enum NameSource {
+  cv
+  sender
+  subject
+}
+
+/// Whether arrivals are screened as they come in, or queued for a person.
+enum ScreeningMode {
+  auto
+  manual
+}
+
 enum CandidateStatus {
   inbox
   screened
@@ -760,6 +779,18 @@ model Candidate {
   /// renders.
   status CandidateStatus @default(inbox)
 
+  /// Archived: hidden from every list, count, funnel and shortlist, kept and
+  /// restorable under the Archived filter. Not deletion.
+  archivedAt        DateTime?   @map("archived_at")
+  archivedBy        String?     @map("archived_by")
+  /// Never a candidate (junk mail). Hidden the same way, its own filter.
+  notApplicationAt  DateTime?   @map("not_application_at")
+  notApplicationBy  String?     @map("not_application_by")
+  nameSource        NameSource? @map("name_source")
+  /// Waiting for the screening runner (auto arrivals, Screen now, a move in
+  /// auto mode). Cleared when the screening lands. Shown as "Queued".
+  screeningQueuedAt DateTime?   @map("screening_queued_at")
+
   /// How this candidate reached this job: 'auto' (matched by the router),
   /// 'fallback' (matched nothing, filed in the mailbox's fallback job),
   /// 'fixed' (the mailbox files everything into one job), or 'manual' (a
@@ -784,6 +815,7 @@ model Candidate {
   @@index([tenantId, jobId, email])
   // The candidates list filters and groups by status within a job.
   @@index([tenantId, jobId, status])
+  @@index([tenantId, archivedAt, notApplicationAt, createdAt])
   @@map("candidates")
 }
 
@@ -815,6 +847,10 @@ enum ScreeningVerdict {
 model Screening {
   id               String           @id @default(cuid())
   candidateId      String           @map("candidate_id")
+  /// The job this screening was run against. A candidate moved to another
+  /// role keeps the old screening in their history; the current one is the
+  /// one for their current job.
+  jobId            String?          @map("job_id")
   score            Int
   matchedMustHaves Json             @map("matched_must_haves")
   gaps             Json
@@ -829,6 +865,7 @@ model Screening {
 
   candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
+  @@index([candidateId, jobId])
   @@map("screenings")
 }
 

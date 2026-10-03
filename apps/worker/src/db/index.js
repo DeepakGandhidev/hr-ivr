@@ -6,6 +6,13 @@ import { emailsMatch, normaliseSpokenEmail } from '../lib/emailMatch.js';
 // must connect with a Postgres role that bypasses RLS (e.g. Supabase service_role
 // or a local superuser). The web app uses withTenant() to enforce RLS per request.
 
+/**
+ * Archived and not-an-application candidates (Batch 7) are invisible to the
+ * line: a call from their number or email gets the standard refusal, because
+ * matching runs fresh on every call and simply never finds them.
+ */
+const ON_THE_LINE = { archivedAt: null, notApplicationAt: null };
+
 function normalizePhone(raw) {
   const s = String(raw ?? '').trim();
   if (!s) return null;
@@ -63,7 +70,7 @@ export async function lookupCandidateByPhone(phoneE164) {
   if (!normalized) return null;
 
   const candidates = await prisma.candidate.findMany({
-    where: { phoneE164: normalized },
+    where: { phoneE164: normalized, ...ON_THE_LINE },
     include: {
       tenant: true,
       job: { include: { callWindows: true } },
@@ -133,7 +140,7 @@ async function resolveEmailToCandidateIds(emailLike) {
   if (!said) return [];
 
   if (said.includes('@')) {
-    const exact = await prisma.candidate.findMany({ where: { email: said }, select: { id: true } });
+    const exact = await prisma.candidate.findMany({ where: { email: said, ...ON_THE_LINE }, select: { id: true } });
     if (exact.length) return exact.map((c) => c.id);
   }
 
@@ -141,7 +148,7 @@ async function resolveEmailToCandidateIds(emailLike) {
   // approved ones. Restricting the pool to approved shortlist items meant an
   // ordinary applicant reading out their own address was told it did not exist.
   const pool = await prisma.candidate.findMany({
-    where: { email: { not: null } },
+    where: { email: { not: null }, ...ON_THE_LINE },
     select: { id: true, email: true },
   });
 
@@ -155,7 +162,7 @@ export async function lookupCandidateByEmail(emailLike) {
   if (!ids.length) return null;
 
   const candidates = await prisma.candidate.findMany({
-    where: { id: { in: ids } },
+    where: { id: { in: ids }, ...ON_THE_LINE },
     include: {
       tenant: true,
       job: { include: { callWindows: true } },

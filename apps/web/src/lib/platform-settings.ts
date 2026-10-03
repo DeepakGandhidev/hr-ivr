@@ -21,6 +21,10 @@ export interface PlatformSettings {
   logoMaxBytes: number;
   portalPostsGate: string;
   interviewTuningGate: string;
+  /** Signals that together suggest "Not an application" on the Pipeline. */
+  junkRule: string[];
+  /** Candidates the screening runner takes per run. */
+  autoScreenBatch: number;
 }
 
 const DEFAULTS: PlatformSettings = {
@@ -36,6 +40,8 @@ const DEFAULTS: PlatformSettings = {
   logoMaxBytes: 2 * 1024 * 1024,
   portalPostsGate: "all",
   interviewTuningGate: "all",
+  junkRule: ["no_phone", "no_job", "subject_name"],
+  autoScreenBatch: 10,
 };
 
 const KEYS: Record<string, keyof PlatformSettings> = {
@@ -51,6 +57,8 @@ const KEYS: Record<string, keyof PlatformSettings> = {
   "company.logo_max_bytes": "logoMaxBytes",
   "gate.portal_posts": "portalPostsGate",
   "gate.interview_tuning": "interviewTuningGate",
+  "pipeline.junk_rule": "junkRule",
+  "pipeline.auto_screen_batch": "autoScreenBatch",
 };
 
 type Db = Pick<typeof adminPrisma, "platformSetting">;

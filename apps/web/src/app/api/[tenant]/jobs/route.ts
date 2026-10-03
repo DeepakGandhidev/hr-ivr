@@ -5,6 +5,7 @@ import { handleApi } from "@/lib/api-errors";
 import { assertCanCreateJob } from "@/lib/billing";
 import { uniqueJobSlug } from "@/lib/slug";
 import { attentionFor, countsForJobs, publishInputsForJobs } from "@/lib/job-insights";
+import { ACTIVE_CANDIDATE } from "@/lib/candidates";
 
 export async function GET(
   request: NextRequest,
@@ -31,7 +32,7 @@ export async function GET(
             orderBy: { version: "desc" },
             take: 1,
           },
-          _count: { select: { candidates: true } },
+          _count: { select: { candidates: { where: ACTIVE_CANDIDATE } } },
         },
       });
 

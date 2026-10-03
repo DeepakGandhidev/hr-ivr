@@ -6,6 +6,8 @@ const nextConfig = {
   transpilePackages: ["@pratibha/shared", "@pratibha/prisma", "@pratibha/worker"],
 
   experimental: {
+    // instrumentation.ts runs the screening queue (Batch 7, Auto mode).
+    instrumentationHook: true,
     typedRoutes: false,
     // The CV upload route reuses the worker's parser, which loads pdf.js.
     // Webpack cannot bundle it: pdf.js resolves its own worker at runtime and

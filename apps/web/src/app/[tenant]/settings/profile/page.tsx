@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import Time from "@/components/Time";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useToast } from "@/components/Toast";
+import { TWO_FACTOR_ENABLED } from "@/lib/features";
 
 interface Me {
   id: string;
@@ -21,30 +23,51 @@ interface NotificationType {
 
 interface SessionRow {
   id: string;
-  createdAt: string | null;
-  lastSeenAt: string | null;
-  userAgent: string | null;
+  current: boolean;
+  device: string;
+  place: string | null;
   ip: string | null;
+  lastSeenAt: string | null;
+}
+
+/** "GD" for Gaurav Dhingra, "HR" for hr@promonkey.tech. */
+function initials(name: string | null, email: string) {
+  const words = (name ?? "").trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return email.slice(0, 2).toUpperCase();
+}
+
+/** "Today, 2:54 pm" or "24 Sep, 1:36 am", in the person's own timezone. */
+function seen(value: string | null, timeZone: string | undefined) {
+  if (!value) return "—";
+  const d = new Date(value);
+  const part = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-GB", { timeZone, ...opts }).format(d);
+  const day = (x: Date) => new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(x);
+  const time = part({ hour: "numeric", minute: "2-digit", hour12: true }).replace(/\s?([ap])\.?m\.?/i, " $1m").toLowerCase();
+  if (day(d) === day(new Date())) return `Today, ${time}`;
+  const date = part({ day: "numeric", month: "short", ...(d.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }) }).replace("Sept", "Sep");
+  return `${date}, ${time}`;
 }
 
 /**
- * The signed-in person's own settings.
- *
- * Ordered by how often it is needed and how much damage it can do: the harmless
- * things first, credentials next, and the security tools last. Password, email
- * and sessions are visually separated from the profile fields because they are
- * not the same kind of action — one is a preference, the others are a change to
- * how you get in.
+ * My profile (Batch 5). The person's own account: who they are, which emails
+ * they get, how they sign in, and where they are signed in. Company details
+ * live in Company profile.
  */
 export default function PersonalProfilePage({ params }: { params: { tenant: string } }) {
   const { tenant } = params;
+  const router = useRouter();
+  const toast = useToast(3200);
+  const uid = useId();
 
   const [me, setMe] = useState<Me | null>(null);
+  const [name, setName] = useState("");
+  const [tzText, setTzText] = useState("");
   const [timezones, setTimezones] = useState<string[]>([]);
   const [types, setTypes] = useState<NotificationType[]>([]);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -52,37 +75,43 @@ export default function PersonalProfilePage({ params }: { params: { tenant: stri
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
+  const [pwError, setPwError] = useState<string | null>(null);
 
   const [newEmail, setNewEmail] = useState("");
   const [emailPassword, setEmailPassword] = useState("");
   const [emailBusy, setEmailBusy] = useState(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
+
+  const loadSessions = useCallback(async () => {
+    const r = await fetch(`/api/${tenant}/profile/sessions`, { cache: "no-store" });
+    if (r.ok) setSessions((await r.json().catch(() => ({}))).sessions ?? []);
+  }, [tenant]);
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/${tenant}/profile`);
+    const res = await fetch(`/api/${tenant}/profile`, { cache: "no-store" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       setError(data.message || "Could not load your profile");
       return;
     }
     setMe(data.user);
+    setName(data.user.name ?? "");
+    setTzText(data.user.timezone ?? "");
     setTimezones(data.timezones ?? []);
     setTypes(data.notificationTypes ?? []);
-
-    const sres = await fetch(`/api/${tenant}/profile/sessions`);
-    if (sres.ok) {
-      const sdata = await sres.json().catch(() => ({}));
-      setSessions(sdata.sessions ?? []);
-    }
-  }, [tenant]);
+    const e = await fetch(`/api/${tenant}/profile/email`, { cache: "no-store" });
+    if (e.ok) setPendingEmail((await e.json().catch(() => ({}))).pendingEmail ?? null);
+    await loadSessions();
+  }, [tenant, loadSessions]);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
   async function patch(body: Record<string, unknown>, note: string) {
     setSaving(true);
     setError(null);
-    setMessage(null);
     try {
       const res = await fetch(`/api/${tenant}/profile`, {
         method: "PATCH",
@@ -92,13 +121,37 @@ export default function PersonalProfilePage({ params }: { params: { tenant: stri
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.message || "Could not save");
-        return;
+        return false;
       }
       setMe(data.user);
-      setMessage(note);
+      toast.show(note);
+      return true;
     } finally {
       setSaving(false);
     }
+  }
+
+  async function saveName() {
+    if (!me || (name.trim() || null) === (me.name ?? null)) return;
+    // The name shows in the sidebar and on everything they author; refresh
+    // the server-rendered parts so it changes there too.
+    if (await patch({ name: name.trim() || null }, "Name saved.")) router.refresh();
+  }
+
+  async function saveTimezone(value: string) {
+    if (!me) return;
+    const tz = value.trim();
+    if (!tz) {
+      if (me.timezone) await patch({ timezone: null }, "Timezone cleared.");
+      return;
+    }
+    const match = timezones.find((t) => t.toLowerCase() === tz.toLowerCase() || t.replace(/_/g, " ").toLowerCase() === tz.toLowerCase());
+    if (!match) {
+      setError("Choose a timezone from the list.");
+      return;
+    }
+    setTzText(match);
+    if (match !== me.timezone) await patch({ timezone: match }, "Timezone saved.");
   }
 
   async function uploadPhoto(file: File) {
@@ -114,7 +167,7 @@ export default function PersonalProfilePage({ params }: { params: { tenant: stri
         setError(data.message || "Could not upload that photo");
         return;
       }
-      await patch({ photoAssetId: data.asset.id }, "Photo updated.");
+      if (await patch({ photoAssetId: data.asset.id }, "Photo updated.")) router.refresh();
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -124,8 +177,7 @@ export default function PersonalProfilePage({ params }: { params: { tenant: stri
   async function changePassword(e: React.FormEvent) {
     e.preventDefault();
     setPwBusy(true);
-    setError(null);
-    setMessage(null);
+    setPwError(null);
     try {
       const res = await fetch(`/api/${tenant}/profile/password`, {
         method: "POST",
@@ -134,17 +186,17 @@ export default function PersonalProfilePage({ params }: { params: { tenant: stri
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data.message || "Could not change your password");
+        setPwError(data.message || "Could not change your password");
         return;
       }
       setCurrentPassword("");
       setNewPassword("");
-      setMessage(
+      toast.show(
         data.otherSessionsEnded
-          ? "Password changed. Every other signed-in device has been signed out."
-          : "Password changed, but other sessions could not be ended — sign out everywhere below."
+          ? "Password changed. Every other device has been signed out."
+          : "Password changed, but other devices could not be signed out. Use Sign out everywhere else."
       );
-      await load();
+      await loadSessions();
     } finally {
       setPwBusy(false);
     }
@@ -153,8 +205,7 @@ export default function PersonalProfilePage({ params }: { params: { tenant: stri
   async function changeEmail(e: React.FormEvent) {
     e.preventDefault();
     setEmailBusy(true);
-    setError(null);
-    setMessage(null);
+    setEmailError(null);
     try {
       const res = await fetch(`/api/${tenant}/profile/email`, {
         method: "POST",
@@ -163,259 +214,319 @@ export default function PersonalProfilePage({ params }: { params: { tenant: stri
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data.message || "Could not change your email");
+        setEmailError(data.message || "Could not change your email");
         return;
       }
+      setPendingEmail(data.pendingEmail ?? newEmail);
       setNewEmail("");
       setEmailPassword("");
-      setMessage(data.message);
     } finally {
       setEmailBusy(false);
     }
   }
 
-  async function signOutEverywhere() {
+  async function pendingAction(method: "PUT" | "DELETE") {
+    setEmailBusy(true);
+    setEmailError(null);
+    try {
+      const res = await fetch(`/api/${tenant}/profile/email`, { method });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setEmailError(data.message || "That did not work");
+        return;
+      }
+      if (method === "DELETE") {
+        setPendingEmail(null);
+        toast.show("Email change cancelled. You still sign in with your current address.");
+      } else {
+        toast.show(`Confirmation sent again to ${data.pendingEmail}.`);
+      }
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  async function signOut(id?: string, device?: string) {
     setError(null);
-    setMessage(null);
-    const res = await fetch(`/api/${tenant}/profile/sessions`, { method: "DELETE" });
+    const res = await fetch(`/api/${tenant}/profile/sessions${id ? `?id=${encodeURIComponent(id)}` : ""}`, { method: "DELETE" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setError(data.message || "Could not sign out the other sessions");
+      setError(data.message || "Could not sign that out");
       return;
     }
-    setMessage("Signed out everywhere else.");
-    await load();
+    toast.show(id ? `Signed out ${device ?? "that device"}.` : "Signed out everywhere else.");
+    await loadSessions();
   }
 
   if (!me) {
-    return (
-      <div className="card empty">
-        {error ? <p className="notice notice-error">{error}</p> : <p className="muted">Loading…</p>}
-      </div>
-    );
+    return <div className="jm">{error ? <div className="notice notice-error">{error}</div> : <p className="muted">Loading…</p>}</div>;
   }
 
   const prefs = me.notificationPrefs ?? {};
+  const tz = me.timezone ?? undefined;
+  const others = sessions.filter((s) => !s.current).length;
 
   return (
-    <div className="dash" style={{ maxWidth: 760 }}>
-      <div className="page-head">
+    <div className="jm mp">
+      <div>
         <h1>My profile</h1>
-        <p className="subtle" style={{ margin: 0 }}>
-          Your own account. Company details are in{" "}
-          <a href={`/${tenant}/settings/company`}>Company profile</a>.
+        <p className="muted mp-sub">
+          Your own account. Company details are in <a href={`/${tenant}/settings/company`}>Company profile</a>.
         </p>
       </div>
 
-      {error && <div className="notice notice-error" style={{ marginBottom: 16 }}>{error}</div>}
-      {message && <div className="notice notice-success" style={{ marginBottom: 16 }}>{message}</div>}
+      {error && <div className="notice notice-error" role="alert">{error}</div>}
 
-      <div className="card stack" style={{ marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0, marginBottom: 0 }}>You</h3>
-
-        <div className="row" style={{ gap: 16, alignItems: "flex-start" }}>
-          <div className="avatar-preview">
-            {me.photoAssetId ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={`/api/${tenant}/assets/${me.photoAssetId}`} alt="" />
-            ) : (
-              <span>{(me.name ?? me.email).slice(0, 1).toUpperCase()}</span>
-            )}
-          </div>
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              disabled={uploading}
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) uploadPhoto(file);
-              }}
-            />
-            <p className="subtle field-hint">PNG, JPG or WebP, up to 2 MB.</p>
-          </div>
-        </div>
-
-        <label>
-          <span>Name</span>
-          <input
-            value={me.name ?? ""}
-            onChange={(e) => setMe({ ...me, name: e.target.value })}
-            onBlur={() => patch({ name: me.name || null }, "Name saved.")}
-          />
-        </label>
-
-        <label>
-          <span>Timezone</span>
-          <select
-            value={me.timezone ?? ""}
-            onChange={(e) => {
-              const timezone = e.target.value || null;
-              setMe({ ...me, timezone });
-              patch({ timezone }, "Timezone saved.");
-            }}
-          >
-            <option value="">Not set</option>
-            {timezones.map((tz) => (
-              <option key={tz} value={tz}>{tz.replace(/_/g, " ")}</option>
-            ))}
-          </select>
-          <span className="subtle field-hint">
-            Only changes how dates are shown to you. Nothing is stored differently.
-          </span>
-        </label>
-      </div>
-
-      <div className="card stack" style={{ marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0, marginBottom: 0 }}>Emails you receive</h3>
-        <p className="subtle" style={{ margin: 0 }}>
-          Turning one off stops that email only. Anything not listed here — a
-          password change, a security alert — is always sent.
-        </p>
-
-        {types.map((type) => {
-          // Absent means on, so a notification added later reaches people
-          // rather than arriving silently disabled.
-          const on = prefs[type.key] !== false;
-          return (
-            <label key={type.key} className="pref-row">
+      <div className="mp-cols">
+        <div className="mp-col">
+          <section className="mp-card" aria-labelledby={`${uid}-you`}>
+            <h2 id={`${uid}-you`} className="mp-title">You</h2>
+            <div className="mp-photo">
+              <div className="mp-avatar" aria-hidden={!me.photoAssetId}>
+                {me.photoAssetId ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={`/api/${tenant}/assets/${me.photoAssetId}`} alt="Your photo" />
+                ) : (
+                  <span>{initials(me.name, me.email)}</span>
+                )}
+              </div>
+              <div className="mp-photo-actions">
+                <input
+                  ref={fileRef}
+                  id={`${uid}-file`}
+                  className="visually-hidden"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  disabled={uploading}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void uploadPhoto(file);
+                  }}
+                />
+                <span>
+                  <button type="button" className="btn-link link-strong" onClick={() => fileRef.current?.click()} disabled={uploading}>
+                    {uploading ? "Uploading…" : "Upload"}
+                  </button>
+                  {me.photoAssetId && (
+                    <>
+                      {" · "}
+                      <button type="button" className="btn-link" onClick={() => patch({ photoAssetId: null }, "Photo removed.").then((ok) => ok && router.refresh())}>
+                        Remove
+                      </button>
+                    </>
+                  )}
+                </span>
+                <span className="mp-help">PNG, JPG or WebP, up to 2 MB.</span>
+              </div>
+            </div>
+            <div className="mp-field">
+              <label htmlFor={`${uid}-name`}>Name</label>
               <input
-                type="checkbox"
-                checked={on}
-                disabled={saving}
-                onChange={(e) =>
-                  patch(
-                    { notificationPrefs: { ...prefs, [type.key]: e.target.checked } },
-                    "Preferences saved."
-                  )
-                }
+                id={`${uid}-name`}
+                autoComplete="name"
+                value={name}
+                maxLength={120}
+                onChange={(e) => setName(e.target.value)}
+                onBlur={saveName}
+                onKeyDown={(e) => e.key === "Enter" && (e.currentTarget as HTMLInputElement).blur()}
               />
-              <span>
-                <strong>{type.label}</strong>
-                <span className="subtle" style={{ display: "block" }}>{type.description}</span>
-              </span>
-            </label>
-          );
-        })}
-      </div>
-
-      <form onSubmit={changePassword} className="card stack" style={{ marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0, marginBottom: 0 }}>Password</h3>
-        <p className="subtle" style={{ margin: 0 }}>
-          Changing it signs out every other device. This one stays signed in.
-        </p>
-
-        <label>
-          <span>Current password</span>
-          <input
-            type="password"
-            autoComplete="current-password"
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-            required
-          />
-        </label>
-
-        <label>
-          <span>New password</span>
-          <input
-            type="password"
-            autoComplete="new-password"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            minLength={10}
-            required
-          />
-          <span className="subtle field-hint">At least 10 characters.</span>
-        </label>
-
-        <div className="row" style={{ justifyContent: "flex-end" }}>
-          <button type="submit" className="btn btn-primary" disabled={pwBusy}>
-            {pwBusy ? "Changing…" : "Change password"}
-          </button>
-        </div>
-      </form>
-
-      <form onSubmit={changeEmail} className="card stack" style={{ marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0, marginBottom: 0 }}>Email address</h3>
-        <p className="subtle" style={{ margin: 0 }}>
-          You sign in with <strong>{me.email}</strong>. A new address has to be
-          confirmed before it takes effect — the current one keeps working until
-          then.
-        </p>
-
-        <label>
-          <span>New email address</span>
-          <input
-            type="email"
-            value={newEmail}
-            onChange={(e) => setNewEmail(e.target.value)}
-            required
-          />
-        </label>
-
-        <label>
-          <span>Current password</span>
-          <input
-            type="password"
-            autoComplete="current-password"
-            value={emailPassword}
-            onChange={(e) => setEmailPassword(e.target.value)}
-            required
-          />
-        </label>
-
-        <div className="row" style={{ justifyContent: "flex-end" }}>
-          <button type="submit" className="btn" disabled={emailBusy}>
-            {emailBusy ? "Sending…" : "Send confirmation"}
-          </button>
-        </div>
-      </form>
-
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div className="row" style={{ marginBottom: 10 }}>
-          <h3 style={{ margin: 0 }}>Where you are signed in</h3>
-          <button className="sm ghost" style={{ marginLeft: "auto" }} onClick={signOutEverywhere}>
-            Sign out everywhere else
-          </button>
-        </div>
-
-        {sessions.length === 0 ? (
-          <p className="subtle" style={{ margin: 0 }}>No other sessions found.</p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr><th>Device</th><th>IP</th><th>Last seen</th></tr>
-              </thead>
-              <tbody>
-                {sessions.map((s) => (
-                  <tr key={s.id}>
-                    {/* Shown as sent. Parsing it into "Chrome on macOS" guesses,
-                        and a wrong guess is worse than a raw string for someone
-                        deciding whether a session is theirs. */}
-                    <td style={{ maxWidth: 320, wordBreak: "break-word" }}>
-                      {s.userAgent ?? "Unknown device"}
-                    </td>
-                    <td>{s.ip ?? "—"}</td>
-                    <td><Time value={s.lastSeenAt} /></td>
-                  </tr>
+            </div>
+            <div className="mp-field">
+              <label htmlFor={`${uid}-tz`}>Timezone</label>
+              <input
+                id={`${uid}-tz`}
+                list={`${uid}-tzs`}
+                value={tzText.replace(/_/g, " ")}
+                placeholder="Search, for example Kolkata"
+                autoComplete="off"
+                aria-describedby={`${uid}-tz-h`}
+                onChange={(e) => setTzText(e.target.value)}
+                onBlur={(e) => saveTimezone(e.target.value)}
+              />
+              <datalist id={`${uid}-tzs`}>
+                {timezones.map((t) => (
+                  <option key={t} value={t.replace(/_/g, " ")} />
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+              </datalist>
+              <p id={`${uid}-tz-h`} className="mp-help">Only changes how dates are shown to you.</p>
+            </div>
+          </section>
+
+          <section className="mp-card" aria-labelledby={`${uid}-mail`}>
+            <div>
+              <h2 id={`${uid}-mail`} className="mp-title">Emails you receive</h2>
+              <p className="mp-help">Turning one off stops that email only. Password changes and security alerts are always sent.</p>
+            </div>
+            {types.map((type) => {
+              // Absent means on, so a notification added later reaches people.
+              const on = prefs[type.key] !== false;
+              return (
+                <label key={type.key} className="mp-pref">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={saving}
+                    onChange={(e) => patch({ notificationPrefs: { ...prefs, [type.key]: e.target.checked } }, "Preferences saved.")}
+                  />
+                  <span>
+                    <span className="mp-pref-label">{type.label}.</span>{" "}
+                    <span className="mp-pref-desc">{type.description}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </section>
+        </div>
+
+        <div className="mp-col">
+          <form onSubmit={changePassword} className="mp-card" aria-labelledby={`${uid}-pw`}>
+            <div>
+              <h2 id={`${uid}-pw`} className="mp-title">Password</h2>
+              <p className="mp-help">Changing it signs out every other device. This one stays signed in.</p>
+            </div>
+            {/* Tells the browser whose password this is, so it offers to
+                update that saved login instead of filling these boxes. */}
+            <input type="text" name="username" autoComplete="username" value={me.email} readOnly hidden />
+            <div className="mp-pair">
+              <div className="mp-field">
+                <label htmlFor={`${uid}-cur`}>Current password</label>
+                <input id={`${uid}-cur`} name="current-password" type="password" autoComplete="current-password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required />
+              </div>
+              <div className="mp-field">
+                <label htmlFor={`${uid}-new`}>New password</label>
+                <input
+                  id={`${uid}-new`}
+                  name="new-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  minLength={10}
+                  required
+                  aria-describedby={`${uid}-new-h`}
+                />
+                <p id={`${uid}-new-h`} className="mp-help">At least 10 characters.</p>
+              </div>
+            </div>
+            {pwError && <p className="mp-error" role="alert">{pwError}</p>}
+            <div className="mp-actions">
+              <button type="submit" className="btn-ink" disabled={pwBusy}>
+                {pwBusy ? "Changing…" : "Change password"}
+              </button>
+            </div>
+          </form>
+
+          <form onSubmit={changeEmail} className="mp-card" aria-labelledby={`${uid}-em`} autoComplete="off">
+            <div>
+              <h2 id={`${uid}-em`} className="mp-title">Email address</h2>
+              <p className="mp-help">
+                You sign in with <strong>{me.email}</strong>. A new address takes effect after you confirm it; until then the current one keeps working.
+              </p>
+            </div>
+            {pendingEmail && (
+              <div className="mp-pending" role="status">
+                <span>Waiting for confirmation at {pendingEmail}</span>
+                <span className="jm-spacer" />
+                <button type="button" className="btn-link link-strong" disabled={emailBusy} onClick={() => pendingAction("PUT")}>
+                  Resend
+                </button>
+                <button type="button" className="btn-link" disabled={emailBusy} onClick={() => pendingAction("DELETE")}>
+                  Cancel
+                </button>
+              </div>
+            )}
+            <input type="text" name="username" autoComplete="username" value={me.email} readOnly hidden />
+            <div className="mp-field">
+              <label htmlFor={`${uid}-ne`}>New email address</label>
+              <input
+                id={`${uid}-ne`}
+                name="new-email"
+                type="email"
+                autoComplete="off"
+                placeholder="name@company.com"
+                value={newEmail}
+                onChange={(e) => setNewEmail(e.target.value)}
+                required
+              />
+            </div>
+            <div className="mp-field">
+              <label htmlFor={`${uid}-ep`}>Current password</label>
+              <input id={`${uid}-ep`} name="email-current-password" type="password" autoComplete="current-password" value={emailPassword} onChange={(e) => setEmailPassword(e.target.value)} required />
+            </div>
+            {emailError && <p className="mp-error" role="alert">{emailError}</p>}
+            <div className="mp-actions">
+              <button type="submit" className="btn-line" disabled={emailBusy}>
+                {emailBusy ? "Sending…" : "Send confirmation"}
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Two-factor authentication</h3>
-        <p className="subtle" style={{ marginTop: 0 }}>
-          Not enabled yet. When it is, it will be handled by the authentication
-          provider that already guards sign-in, so that it actually gates a
-          login rather than only these screens.
+      <section className="mp-card" aria-labelledby={`${uid}-ss`}>
+        <div className="mp-head">
+          <h2 id={`${uid}-ss`} className="mp-title">Where you are signed in</h2>
+          <span className="jm-spacer" />
+          {others > 0 && (
+            <button type="button" className="btn-line sm" onClick={() => signOut()}>
+              Sign out everywhere else
+            </button>
+          )}
+        </div>
+        {sessions.length === 0 ? (
+          <p className="mp-help">No sessions found.</p>
+        ) : (
+          <table className="rtable mp-sessions">
+            <caption className="visually-hidden">Where you are signed in</caption>
+            <thead>
+              <tr>
+                <th scope="col">Device</th>
+                <th scope="col">Location and IP</th>
+                <th scope="col">Last seen</th>
+                <th scope="col"><span className="visually-hidden">Action</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sessions.map((s) => (
+                <tr key={s.id}>
+                  <td data-label="Device">
+                    <span className="mp-device">{s.device}</span>
+                    {s.current && <span className="chip chip-green sm">This device</span>}
+                  </td>
+                  <td data-label="Location and IP">{[s.place, s.ip].filter(Boolean).join(" · ") || "—"}</td>
+                  <td data-label="Last seen">{seen(s.lastSeenAt, tz)}</td>
+                  <td className="cell-actions">
+                    {!s.current && (
+                      <button type="button" className="btn-link link-strong" aria-label={`Sign out ${s.device}${s.place ? ` in ${s.place}` : ""}`} onClick={() => signOut(s.id, s.device)}>
+                        Sign out
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <p className="mp-help">If you see a device or place you do not recognise, sign it out and change your password.</p>
+        <p className="mp-attrib">
+          <a href="https://db-ip.com" target="_blank" rel="noreferrer">IP Geolocation by DB-IP</a>
         </p>
-      </div>
+      </section>
+
+      {TWO_FACTOR_ENABLED && (
+        <section className="mp-card" aria-labelledby={`${uid}-2fa`}>
+          <h2 id={`${uid}-2fa`} className="mp-title">Two step verification</h2>
+          <p className="mp-help">Adds a one time code from an authenticator app when you sign in.</p>
+        </section>
+      )}
+
+      <section className="mp-card mp-quiet" aria-label="Your data">
+        <p>
+          Want a copy of your data, or to close your account? Write to <a href="mailto:start@pratibha.tech?subject=Data%20request">start@pratibha.tech</a> with the subject Data request.
+        </p>
+      </section>
+
+      {toast.node}
     </div>
   );
 }

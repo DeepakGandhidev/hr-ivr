@@ -2,6 +2,23 @@ import { STATES, TERMINAL, TOOLS_BY_STATE, isVerified } from './states.js';
 import { lookupCandidateByEmail, recordInterviewCall, updateInterviewCall } from '../db/index.js';
 import { isTenantPaused } from './tenantStatus.js';
 import { emailsMatch } from './emailMatch.js';
+import { fillBlock, formatBandSpoken, interviewOptionsFrom, parseCtc, salaryVerdict } from '@pratibha/shared';
+
+/** Screener answers as stored on the call (I20). Field → record key. */
+const DETAIL_FIELDS = {
+  notice_period: 'noticePeriod',
+  current_ctc: 'currentCtc',
+  expected_ctc: 'expectedCtc',
+  reason_for_leaving: 'reasonForLeaving',
+  gap_explanation: 'gapExplanation',
+  location: 'location',
+  work_mode: 'workMode',
+  travel: 'travel',
+  reference_name: 'referenceName',
+  reference_phone: 'referencePhone',
+  reference_relation: 'referenceRelation',
+  band_answer: 'bandAnswer',
+};
 
 function deriveCriteria(job) {
   const mustHaves = Array.isArray(job?.mustHaves) ? job.mustHaves : [];
@@ -28,6 +45,8 @@ function attachCandidate(session, lookup) {
   session.tenant = lookup.tenant;
   session.latestApprovedJd = lookup.latestApprovedJd;
   session.interviewProtocol = lookup.interviewProtocol;
+  session.screeningGaps = lookup.screeningGaps ?? [];
+  if (lookup.promptBlocks) session.promptBlocks = lookup.promptBlocks;
   session.approved = lookup.approved;
   session.alreadyInterviewed = lookup.hasCompleted;
   session.criteria = deriveCriteria(lookup.job);
@@ -102,6 +121,18 @@ export const TOOL_DEFINITIONS = {
         granted: { type: 'boolean' }
       },
       required: ['granted']
+    }
+  },
+  record_detail: {
+    name: 'record_detail',
+    description: 'Record the candidate\'s answer to one of the practical questions, in their own words. For salaries, pass the figure exactly as they said it; it is converted to an annual figure for you. Follow any instruction or say_exactly in the result.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        field: { type: 'string', enum: Object.keys(DETAIL_FIELDS) },
+        value: { type: 'string', description: 'What they said, in their words' }
+      },
+      required: ['field', 'value']
     }
   },
   finish_screening: {
@@ -180,6 +211,7 @@ export class ToolExecutor {
       case 'select_language': return this.#selectLanguage(input, session);
       case 'record_time_consent': return this.#timeConsent(input, session);
       case 'record_recording_consent': return this.#recordingConsent(input, session);
+      case 'record_detail': return this.#recordDetail(input, session);
       case 'finish_screening': return this.#finishScreening(input, session);
       case 'escalate': return this.#escalate(input, session);
       case 'end_call': return this.#endCall(input, session);
@@ -410,12 +442,67 @@ export class ToolExecutor {
       : { recording: false, instruction: 'Tell them that is absolutely fine, you will not record and will take notes instead, then begin the screening questions.' };
   }
 
+  /**
+   * I12 / I20. One screener answer onto the call record. Salaries are parsed
+   * to an annual figure here, not by the model, and the mismatch policy is
+   * applied here too: what she says about a band is a fixed line from the
+   * block library, so she can state it but never negotiate it.
+   */
+  async #recordDetail({ field, value }, session) {
+    const key = DETAIL_FIELDS[field];
+    if (!key) return { error: `Unknown field ${field}` };
+    const details = (session.practicalDetails ??= {});
+    const said = String(value ?? '').trim().slice(0, 500);
+
+    if (field === 'current_ctc' || field === 'expected_ctc') {
+      details[key] = { said, annual: parseCtc(said) };
+    } else {
+      details[key] = said;
+    }
+
+    let result = { recorded: true, instruction: 'Thank them neutrally and move on. Do not comment on the answer.' };
+
+    if (field === 'expected_ctc') {
+      const options = interviewOptionsFrom(session.interviewProtocol);
+      const bandMax = session.job?.salaryMax ?? null;
+      const verdict = salaryVerdict(details.expectedCtc.annual, bandMax);
+      if (verdict === 'above') {
+        session.salaryMismatch = true;
+        details.salaryMismatch = { expectedAnnual: details.expectedCtc.annual, bandMax, action: options.mismatchAction };
+        session.transcript?.record('salary.mismatch', { expected: details.expectedCtc.annual, bandMax, action: options.mismatchAction });
+        const band = formatBandSpoken(session.job?.salaryMin ?? null, bandMax);
+        const line = (name) => fillBlock(session.promptBlocks?.blocks?.[name] ?? '', { band });
+
+        if (options.mismatchAction === 'check' && line('line_salary_check')) {
+          result = { recorded: true, say_exactly: line('line_salary_check'), instruction: 'Then record their answer with field band_answer and carry on.' };
+        } else if (options.mismatchAction === 'end' && line('line_salary_end')) {
+          // Wrapped up, not cut off: the call still counts as completed, and
+          // the report is written with the mismatch on it.
+          session.screeningFinished = true;
+          session.finish(TERMINAL.COMPLETED);
+          result = { recorded: true, say_exactly: line('line_salary_end'), ended: true };
+        } else {
+          result = { recorded: true, instruction: 'Thank them neutrally and move on. Do not mention the band.' };
+        }
+      }
+    }
+
+    await this.#patch(session, {
+      practicalDetails: details,
+      ...(session.salaryMismatch ? { salaryMismatch: true } : {}),
+    });
+    return result;
+  }
+
   async #finishScreening({ criteria_covered = [], criteria_not_covered = [] }, session) {
     session.criteriaCovered = criteria_covered;
     session.criteriaNotCovered = criteria_not_covered;
     session.screeningFinished = true;
     session.setState(STATES.CANDIDATE_QA);
-    return { instruction: 'Tell them that is everything from your side and ask whether they have any questions about the role or the company.' };
+    const options = interviewOptionsFrom(session.interviewProtocol);
+    return options.candidateQuestions
+      ? { instruction: 'Tell them that is everything from your side and ask whether they have any questions about the role or the company.' }
+      : { instruction: 'Tell them that is everything from your side, close the call as your closing instructions say, and call end_call.' };
   }
 
   async #escalate({ category, reason }, session) {

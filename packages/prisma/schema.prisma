@@ -609,6 +609,10 @@ model Job {
   status             JobStatus @default(draft)
   location           String?
   salaryBand         String?   @map("salary_band")
+  /// Batch 6, I02: the band as numbers, annual rupees. The text above stays for
+  /// the JD; these drive the salary policy on calls. Null means no band set.
+  salaryMin          Int?      @map("salary_min")
+  salaryMax          Int?      @map("salary_max")
   experienceRange    String?   @map("experience_range")
   mustHaves          Json      @map("must_haves")
   goodToHaves        Json      @map("good_to_haves")
@@ -1008,6 +1012,12 @@ enum InterviewDifficulty {
   expert
 }
 
+enum SalaryMismatchAction {
+  note
+  check
+  end
+}
+
 model InterviewProtocol {
   id              String  @id @default(cuid())
   tenantId        String  @map("tenant_id")
@@ -1026,6 +1036,26 @@ model InterviewProtocol {
   /// Null falls back to the tenant name.
   agentName       String?             @map("agent_name")
   companyName     String?             @map("company_name")
+
+  /// Batch 6, I01: screeners Pratibha asks near the end of every call.
+  screenNotice        Boolean @default(true) @map("screen_notice")
+  screenSalary        Boolean @default(true) @map("screen_salary")
+  screenReasonLeaving Boolean @default(true) @map("screen_reason_leaving")
+  screenGaps          Boolean @default(true) @map("screen_gaps")
+  screenLocation      Boolean @default(false) @map("screen_location")
+  screenWorkMode      Boolean @default(false) @map("screen_work_mode")
+  screenTravel        Boolean @default(false) @map("screen_travel")
+  screenReference     Boolean @default(false) @map("screen_reference")
+  /// Salary policy. Pratibha never negotiates; these only decide what she says.
+  shareBand           Boolean              @default(true) @map("share_band")
+  mismatchAction      SalaryMismatchAction @default(check) @map("mismatch_action")
+  /// The conversation.
+  introduceRole       Boolean @default(true) @map("introduce_role")
+  candidateQuestions  Boolean @default(true) @map("candidate_questions")
+  hearBackDays        Int?    @default(3) @map("hear_back_days")
+  /// Up to three questions asked word for word. Enforced at the API.
+  customQuestions     Json    @default("[]") @map("custom_questions")
+
   version         Int
   updatedBy       String?             @map("updated_by")
   createdAt       DateTime            @default(now()) @map("created_at")
@@ -1082,6 +1112,13 @@ model InterviewCall {
   /// an invoice can be reconciled against the call that produced it, even if
   /// the rounding rule changes later.
   billableMinutes Int?      @map("billable_minutes")
+
+  /// Batch 6, I20: screener answers as fields - noticePeriod, currentCtc,
+  /// expectedCtc (rupees a year), reasonForLeaving, location, workMode, travel,
+  /// referenceName, referencePhone, referenceRelation, bandAnswer.
+  practicalDetails Json?   @map("practical_details")
+  /// I12: expected CTC came in above the role's band maximum.
+  salaryMismatch   Boolean @default(false) @map("salary_mismatch")
 
   telephonyCost Float?   @map("telephony_cost")
   llmCostUsd    Float?   @map("llm_cost_usd")
@@ -1431,4 +1468,22 @@ model BlockedNumber {
 
   @@index([phoneE164])
   @@map("blocked_numbers")
+}
+
+/// Batch 5 (P01, P16). One row per GoTrue session, written once when a real
+/// browser signs in. GoTrue's own auth.sessions.user_agent is overwritten by
+/// every server-side token refresh, so the device and place a person signed in
+/// from are kept here instead. Location comes from a local database at sign in
+/// and is never looked up per page view.
+model SessionOrigin {
+  sessionId String   @id @map("session_id") @db.Uuid
+  userId    String   @map("user_id")
+  userAgent String?  @map("user_agent")
+  ip        String?
+  city      String?
+  country   String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("session_origins")
 }

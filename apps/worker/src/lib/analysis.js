@@ -3,6 +3,7 @@ import { prisma } from '@pratibha/prisma';
 import { samplingFor, thinkingFor } from './sampling.js';
 import { createAssessmentReport } from '../db/index.js';
 import { cvList } from './cv.js';
+import { formatBandSpoken, formatRupeesSpoken } from '@pratibha/shared';
 
 const INTERNAL_RECOMMENDATIONS = ['pursue', 'hold', 'do_not_pursue'];
 
@@ -270,9 +271,14 @@ export class PostCallAnalyst {
           // Per-requirement fit (J62). Kept in dimensions, so no schema change;
           // jdFitSummary below stays as the fallback for reports without it.
           requirementFit: assessment.requirement_fit,
+          // I20: screener answers, as recorded during the call.
+          ...(session.practicalDetails ? { practicalDetails: session.practicalDetails } : {}),
+          ...(session.salaryMismatch ? { salaryMismatch: true } : {}),
         },
         strengths: assessment.strengths,
-        concerns: assessment.gaps,
+        // I21: an expectation above the band is always a concern, whatever
+        // the model wrote, so it can never be missing from the report.
+        concerns: [...salaryConcern(session), ...(assessment.gaps ?? [])],
         notableQuotes: {},
 
         // Falls back to the criterion mean when the model omits the score - but
@@ -371,6 +377,16 @@ export class PostCallAnalyst {
       dropped_scores: rejected.length
     };
   }
+}
+
+/** I21: the mismatch concern, worded from the recorded numbers. */
+export function salaryConcern(session) {
+  const m = session?.practicalDetails?.salaryMismatch;
+  if (!session?.salaryMismatch || !m) return [];
+  const expected = m.expectedAnnual ? formatRupeesSpoken(m.expectedAnnual) : 'their stated figure';
+  const band = formatBandSpoken(session.job?.salaryMin ?? null, m.bandMax);
+  const outcome = { note: 'Noted without raising it on the call.', check: 'They were told the band and asked whether they could work within it.', end: 'The interview was wrapped up early because of it.' }[m.action] ?? '';
+  return [`Salary mismatch: expects about ${expected} a year, above the role's band of ${band}. ${outcome}`.trim()];
 }
 
 function mapRecommendation(internal) {

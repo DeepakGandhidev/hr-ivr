@@ -6,6 +6,7 @@ import Link from "next/link";
 import MarkdownEditor from "@/components/MarkdownEditor";
 import Markdown, { markdownToPlain, truncateEnd } from "@/components/Markdown";
 import Time from "@/components/Time";
+import SalaryBandFields, { bandText, bandValue } from "@/components/SalaryBandFields";
 
 interface JobVersion {
   id: string;
@@ -35,6 +36,8 @@ interface Job {
   title: string;
   location?: string | null;
   salaryBand?: string | null;
+  salaryMin?: number | null;
+  salaryMax?: number | null;
   experienceRange?: string | null;
   mustHaves: string[];
   goodToHaves: string[];
@@ -54,6 +57,8 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
   const [title, setTitle] = useState("");
   const [location, setLocation] = useState("");
   const [salaryBand, setSalaryBand] = useState("");
+  const [bandMin, setBandMin] = useState("");
+  const [bandMax, setBandMax] = useState("");
   const [experienceRange, setExperienceRange] = useState("");
   const [mustHaves, setMustHaves] = useState("");
   const [goodToHaves, setGoodToHaves] = useState("");
@@ -77,6 +82,8 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
     setTitle(loaded.title ?? "");
     setLocation(loaded.location ?? "");
     setSalaryBand(loaded.salaryBand ?? "");
+    setBandMin(bandText(loaded.salaryMin));
+    setBandMax(bandText(loaded.salaryMax));
     setExperienceRange(loaded.experienceRange ?? "");
     setMustHaves((loaded.mustHaves ?? []).join("\n"));
     setGoodToHaves((loaded.goodToHaves ?? []).join("\n"));
@@ -117,6 +124,8 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
           title,
           location: location || null,
           salaryBand: salaryBand || null,
+          salaryMin: bandValue(bandMin),
+          salaryMax: bandValue(bandMax),
           experienceRange: experienceRange || null,
           mustHaves: asList(mustHaves),
           goodToHaves: asList(goodToHaves),
@@ -189,6 +198,8 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
             <input value={experienceRange} onChange={(e) => setExperienceRange(e.target.value)} />
           </label>
         </div>
+
+        <SalaryBandFields min={bandMin} max={bandMax} onMin={setBandMin} onMax={setBandMax} />
 
         <label>
           <div className="subtle">Must have — one per line</div>

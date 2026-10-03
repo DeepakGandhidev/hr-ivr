@@ -8,6 +8,7 @@ import Time from "@/components/Time";
 import Transcript, { type TranscriptTurn } from "@/components/Transcript";
 import { callMinutes, plural } from "@/lib/format";
 import { CANDIDATE_STATUS_LABELS, type CandidateStatus } from "@pratibha/shared";
+import PracticalDetails, { hasPracticalDetails, type PracticalDetailsData } from "@/components/PracticalDetails";
 
 export interface QuestionAnswer {
   question: string;
@@ -37,7 +38,11 @@ export interface InterviewReportData {
   jdFitSummary: string | null;
   recommendationScore: number | null;
   recommendationVerdict: string | null;
-  dimensions?: { recommendationReasoning?: string; requirementFit?: RequirementFit[] } | null;
+  dimensions?: {
+    recommendationReasoning?: string;
+    requirementFit?: RequirementFit[];
+    practicalDetails?: PracticalDetailsData;
+  } | null;
   interviewCall?: {
     id: string;
     startedAt?: string | null;
@@ -259,6 +264,11 @@ export default function InterviewReport({
           )}
         </div>
       </div>
+
+      {/* I20: what the screeners collected */}
+      {hasPracticalDetails(report.dimensions?.practicalDetails) && (
+        <PracticalDetails details={report.dimensions!.practicalDetails!} />
+      )}
 
       {/* Fit — per requirement when the report has it, the paragraph otherwise */}
       <section>

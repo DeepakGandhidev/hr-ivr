@@ -25,6 +25,12 @@ export interface PlatformSettings {
   junkRule: string[];
   /** Candidates the screening runner takes per run. */
   autoScreenBatch: number;
+  /** Batch 6, I31: the interview plan estimate. */
+  roleIntroSeconds: number;
+  customQuestionSeconds: number;
+  candidateQuestionsSeconds: number;
+  coreQuestionSeconds: number;
+  wrapUpSlackMinutes: number;
 }
 
 const DEFAULTS: PlatformSettings = {
@@ -42,6 +48,11 @@ const DEFAULTS: PlatformSettings = {
   interviewTuningGate: "all",
   junkRule: ["no_phone", "no_job", "subject_name"],
   autoScreenBatch: 10,
+  roleIntroSeconds: 30,
+  customQuestionSeconds: 60,
+  candidateQuestionsSeconds: 60,
+  coreQuestionSeconds: 60,
+  wrapUpSlackMinutes: 1,
 };
 
 const KEYS: Record<string, keyof PlatformSettings> = {
@@ -59,6 +70,11 @@ const KEYS: Record<string, keyof PlatformSettings> = {
   "gate.interview_tuning": "interviewTuningGate",
   "pipeline.junk_rule": "junkRule",
   "pipeline.auto_screen_batch": "autoScreenBatch",
+  "interview.role_intro_seconds": "roleIntroSeconds",
+  "interview.custom_question_seconds": "customQuestionSeconds",
+  "interview.candidate_questions_seconds": "candidateQuestionsSeconds",
+  "interview.core_question_seconds": "coreQuestionSeconds",
+  "interview.wrap_up_slack_minutes": "wrapUpSlackMinutes",
 };
 
 type Db = Pick<typeof adminPrisma, "platformSetting">;
@@ -82,4 +98,16 @@ export function planClearsGate(planKey: string | null | undefined, gate: string)
   const need = TIERS.indexOf(gate);
   const have = TIERS.indexOf(planKey ?? "");
   return need === -1 || (have !== -1 && have >= need);
+}
+
+/** I31: the plan card's constants, from DB config. */
+export function planConstants(s: PlatformSettings) {
+  return {
+    roleIntroSeconds: s.roleIntroSeconds,
+    screenerSeconds: s.screenerSeconds,
+    customQuestionSeconds: s.customQuestionSeconds,
+    candidateQuestionsSeconds: s.candidateQuestionsSeconds,
+    coreQuestionSeconds: s.coreQuestionSeconds,
+    wrapUpSlackMinutes: s.wrapUpSlackMinutes,
+  };
 }

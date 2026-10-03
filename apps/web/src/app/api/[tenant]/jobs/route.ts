@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Action, createJobSchema, ValidationError } from "@pratibha/shared";
+import { Action, createJobSchema, parseSalaryBand, ValidationError } from "@pratibha/shared";
 import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { assertCanCreateJob } from "@/lib/billing";
@@ -89,6 +89,9 @@ export async function POST(
           title: parsed.data.title,
           location: parsed.data.location,
           salaryBand: parsed.data.salaryBand,
+          // I02: numbers from the form, else read off the text band when its
+          // shape is clear ("6-8 LPA"); a person can correct them on the role.
+          ...bandNumbers(parsed.data),
           experienceRange: parsed.data.experienceRange,
           mustHaves: parsed.data.mustHaves,
           goodToHaves: parsed.data.goodToHaves,
@@ -99,4 +102,15 @@ export async function POST(
       return NextResponse.json({ job }, { status: 201 });
     });
   });
+}
+
+function bandNumbers(data: { salaryBand?: string | null; salaryMin?: number | null; salaryMax?: number | null }) {
+  if (data.salaryMin !== undefined || data.salaryMax !== undefined) {
+    if (data.salaryMin && data.salaryMax && data.salaryMin > data.salaryMax) {
+      throw new ValidationError("The band minimum is above the maximum.", { salaryMin: data.salaryMin, salaryMax: data.salaryMax });
+    }
+    return { salaryMin: data.salaryMin ?? null, salaryMax: data.salaryMax ?? null };
+  }
+  const parsed = parseSalaryBand(data.salaryBand);
+  return parsed ? { salaryMin: parsed.min, salaryMax: parsed.max } : {};
 }

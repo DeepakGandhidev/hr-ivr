@@ -3,6 +3,7 @@ import { Action, ValidationError, writeAuditLog } from "@pratibha/shared";
 import { authorizeTenant } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { createClient } from "@/lib/supabase/server";
+import { passwordMatches } from "@/lib/reauth";
 import { sendEmail } from "@/lib/email";
 import { z } from "zod";
 
@@ -41,15 +42,13 @@ export async function POST(
     const { ctx, tx } = await authorizeTenant(tenant, Action.candidateRead);
     const supabase = createClient();
 
-    // Re-authenticate. signInWithPassword is the only way to check the current
-    // password through GoTrue, and it is done against this user's own email so
-    // it cannot be used to probe anyone else's.
-    const { error: reauthError } = await supabase.auth.signInWithPassword({
-      email: ctx.user.email,
-      password: parsed.data.currentPassword,
-    });
+    // Re-authenticate against this user's own email, so it cannot be used to
+    // probe anyone else's. Checked on a throwaway client: signing in through
+    // the cookie client used to replace this browser's session with a new one
+    // and leave the old row behind (Batch 5, P01).
+    const reauthOk = await passwordMatches(ctx.user.email, parsed.data.currentPassword);
 
-    if (reauthError) {
+    if (!reauthOk) {
       // Deliberately not distinguishing "wrong password" from anything else in
       // the response, while still recording the attempt.
       await tx(async (db) => {

@@ -38,7 +38,7 @@ export const TOOLS_BY_STATE = {
   [STATES.LANGUAGE_SELECT]: ['select_language', 'end_call'],
   [STATES.CONSENT_TIME]: ['record_time_consent', 'escalate'],
   [STATES.CONSENT_RECORDING]: ['record_recording_consent', 'escalate'],
-  [STATES.SCREEN]: ['finish_screening', 'escalate'],
+  [STATES.SCREEN]: ['record_detail', 'finish_screening', 'escalate'],
   [STATES.CANDIDATE_QA]: ['end_call', 'escalate'],
   [STATES.CLOSE]: []
 };

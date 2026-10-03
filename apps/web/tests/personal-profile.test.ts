@@ -46,8 +46,10 @@ describe("notification preferences", () => {
 describe("password change", () => {
   const route = read("src/app/api/[tenant]/profile/password/route.ts");
 
+  // Checked on a throwaway client (Batch 5, P01), so the check itself cannot
+  // leave a session behind or replace this browser's own.
   it("verifies the current password before changing anything", () => {
-    const reauth = route.indexOf("signInWithPassword");
+    const reauth = route.indexOf("passwordMatches(");
     const update = route.indexOf("updateUser({");
     expect(reauth).toBeGreaterThan(-1);
     expect(reauth).toBeLessThan(update);
@@ -75,7 +77,13 @@ describe("email change", () => {
   const route = read("src/app/api/[tenant]/profile/email/route.ts");
 
   it("requires the current password", () => {
-    expect(route).toContain("signInWithPassword");
+    expect(route).toContain("passwordMatches(ctx.user.email, parsed.data.currentPassword)");
+  });
+
+  it("checks passwords without leaving a session behind", () => {
+    const reauth = read("src/lib/reauth.ts");
+    expect(reauth).toContain("persistSession: false");
+    expect(reauth).toContain('signOut({ scope: "local" })');
   });
 
   /**
@@ -98,8 +106,14 @@ describe("sessions", () => {
 
   // auth.sessions is GoTrue's schema: outside Prisma's models and outside our
   // RLS policies, so the query has to be pinned to this user's own auth id.
-  it("scopes the raw query to the signed-in user", () => {
-    expect(route).toContain("WHERE user_id = ${ctx.user.authProviderId}::uuid");
+  it("scopes the raw queries to the signed-in user", () => {
+    expect(route).toContain("WHERE s.user_id = ${ctx.user.authProviderId}::uuid");
+    // Signing out one device can only ever reach this user's own sessions.
+    expect(route).toContain("AND user_id = ${ctx.user.authProviderId}::uuid");
+  });
+
+  it("never shows a server runtime as a device", () => {
+    expect(route).toContain("describeUserAgent(");
   });
 
   it("keeps the current session alive when signing out the others", () => {

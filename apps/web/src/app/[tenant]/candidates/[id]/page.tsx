@@ -7,6 +7,7 @@ import { CandidateStatusBadge, CandidateStatusPicker } from "@/components/Candid
 import Markdown from "@/components/Markdown";
 import { recommendationChip, verdictLabel } from "@/components/JobShell";
 import { formatDate, formatDateTime } from "@/lib/format";
+import PracticalDetails, { hasPracticalDetails, type PracticalDetailsData } from "@/components/PracticalDetails";
 
 /**
  * Everything about one candidate, on one screen.
@@ -57,6 +58,8 @@ interface Call {
   language: string | null;
   transcriptRef: string | null;
   recordingRef: string | null;
+  practicalDetails?: PracticalDetailsData | null;
+  salaryMismatch?: boolean;
   assessmentReport: Report | null;
 }
 
@@ -125,6 +128,8 @@ export default function CandidatePage({ params }: { params: { tenant: string; id
 
   const latest = candidate.screenings[0];
   const report = candidate.interviewCalls.find((c) => c.assessmentReport)?.assessmentReport ?? null;
+  // I20: the latest call that collected screener answers.
+  const practical = candidate.interviewCalls.find((c) => hasPracticalDetails(c.practicalDetails))?.practicalDetails ?? null;
 
   return (
     <div className="dash" style={{ maxWidth: 980 }}>
@@ -287,6 +292,12 @@ export default function CandidatePage({ params }: { params: { tenant: string; id
 
           <Dimensions dimensions={report.dimensions} />
           <Quotes quotes={report.notableQuotes} />
+        </div>
+      )}
+
+      {practical && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <PracticalDetails details={practical} />
         </div>
       )}
 

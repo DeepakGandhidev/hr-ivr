@@ -12,6 +12,7 @@ import {
   updateInterviewCall,
   incrementInterviewUsage,
   recordUnknownCall,
+  activePromptBlocks,
 } from '../db/index.js';
 import { isTenantPaused } from './tenantStatus.js';
 
@@ -158,6 +159,16 @@ export class CallSession {
     // Knowing who called is what matters, not whether a recruiter has approved
     // them: applying to the role is the qualification. Routing on `approved`
     // sent every ordinary applicant down the unrecognised path.
+    // The prompt is assembled from the active block library (I10), which an
+    // unrecognised caller needs as much as a recognised one. Loaded alongside
+    // the greeting rather than ahead of it, and awaited before the first turn.
+    const blocksReady = session.promptBlocks || lookup?.promptBlocks
+      ? Promise.resolve(lookup?.promptBlocks ?? session.promptBlocks)
+      : activePromptBlocks().catch(err => {
+        this.logger.error({ err: err.message }, 'Prompt block library failed to load');
+        return null;
+      });
+
     if (lookup?.candidate) {
       this.#attachLookup(session, lookup);
       session.recognised = true;
@@ -182,6 +193,8 @@ export class CallSession {
     await this.#say(disclosure, { isDisclosure: true });
     session.history.push({ role: 'assistant', content: disclosure });
 
+    session.promptBlocks = (await blocksReady) ?? session.promptBlocks ?? null;
+
     // Kick off the first model turn so it asks the right opening question
     // (language choice, or email if the caller was not recognised).
     if (!session.ended) {
@@ -204,6 +217,8 @@ export class CallSession {
     session.tenant = lookup.tenant;
     session.latestApprovedJd = lookup.latestApprovedJd;
     session.interviewProtocol = lookup.interviewProtocol;
+    session.screeningGaps = lookup.screeningGaps ?? [];
+    if (lookup.promptBlocks) session.promptBlocks = lookup.promptBlocks;
     session.approved = lookup.approved;
     session.alreadyInterviewed = lookup.hasCompleted;
     session.criteria = deriveCriteria(lookup.job);
@@ -548,6 +563,8 @@ export class CallSession {
         llmCostUsd,
         ttsCostUsd: session.ttsCostUsd ?? 0,
         sttCostUsd: session.sttCostUsd ?? 0,
+        ...(session.practicalDetails ? { practicalDetails: session.practicalDetails } : {}),
+        ...(session.salaryMismatch ? { salaryMismatch: true } : {}),
       }).catch(err => this.logger.error({ err: err.message }, 'Final call patch failed'));
 
       // Explicitly NOT billed (2.8, 5 Stage 8): unknown callers, out-of-window

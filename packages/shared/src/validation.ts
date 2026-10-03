@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { GUARDRAIL_ERROR, MAX_CUSTOM_QUESTIONS, touchesPersonalTopic } from './interviewPlan.js';
 
 export const createTenantSchema = z.object({
   name: z.string().min(1).max(120),
@@ -10,9 +11,13 @@ export const createTenantSchema = z.object({
 
 export const createJobSchema = z.object({
   title: z.string().min(1).max(200),
-  location: z.string().max(200).optional(),
-  salaryBand: z.string().max(200).optional(),
-  experienceRange: z.string().max(200).optional(),
+  // Nullable: the role form clears an optional field by sending null.
+  location: z.string().max(200).nullable().optional(),
+  salaryBand: z.string().max(200).nullable().optional(),
+  /** I02: annual rupees. */
+  salaryMin: z.coerce.number().int().positive().max(1_000_000_000).nullable().optional(),
+  salaryMax: z.coerce.number().int().positive().max(1_000_000_000).nullable().optional(),
+  experienceRange: z.string().max(200).nullable().optional(),
   mustHaves: z.array(z.string()).max(20).default([]),
   goodToHaves: z.array(z.string()).max(20).default([]),
 });
@@ -42,9 +47,14 @@ export const outreachTemplateSchema = z.object({
   bodyMd: z.string().min(1),
 });
 
+/** I14: refused at save, whichever client sent it. */
+const guarded = (max: number) =>
+  z.string().max(max).refine((v) => !touchesPersonalTopic(v), { message: GUARDRAIL_ERROR });
+
 export const interviewProtocolSchema = z.object({
   jobId: z.string().optional(),
-  instructionText: z.string().min(1).max(20000),
+  /** "Anything else, in your words": optional since Batch 6 demoted it. */
+  instructionText: guarded(20000).default(''),
   /** Bounds mirror the database CHECK constraints, so the UI cannot offer a
    *  value the write will reject. */
   durationMinutes: z.coerce.number().int().min(2).max(90).optional(),
@@ -54,6 +64,26 @@ export const interviewProtocolSchema = z.object({
   focusAreas: z.array(z.string().min(1).max(60)).max(12).optional(),
   agentName: z.string().min(1).max(60).nullable().optional(),
   companyName: z.string().min(1).max(120).nullable().optional(),
+  // Batch 6, I01.
+  screenNotice: z.boolean().optional(),
+  screenSalary: z.boolean().optional(),
+  screenReasonLeaving: z.boolean().optional(),
+  screenGaps: z.boolean().optional(),
+  screenLocation: z.boolean().optional(),
+  screenWorkMode: z.boolean().optional(),
+  screenTravel: z.boolean().optional(),
+  screenReference: z.boolean().optional(),
+  shareBand: z.boolean().optional(),
+  mismatchAction: z.enum(['note', 'check', 'end']).optional(),
+  introduceRole: z.boolean().optional(),
+  candidateQuestions: z.boolean().optional(),
+  hearBackDays: z.coerce.number().int().min(1).max(30).nullable().optional(),
+  // I13: three at most, enforced here rather than trusted from the form.
+  customQuestions: z
+    .array(guarded(300))
+    .max(MAX_CUSTOM_QUESTIONS, `Three questions at most.`)
+    .transform((qs) => qs.map((q) => q.trim()).filter(Boolean))
+    .optional(),
 }).superRefine((value, ctx) => {
   if (
     value.minQuestions !== undefined &&

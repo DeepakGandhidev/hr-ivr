@@ -4,6 +4,7 @@ import { STATES, TERMINAL } from './states.js';
 import { samplingFor, thinkingFor } from './sampling.js';
 import { splitSentences, takeSentences } from '../utils/speech.js';
 import { cvList } from './cv.js';
+import { assembleInterviewPrompt, interviewOptionsFrom } from '@pratibha/shared';
 
 // Turns kept per call. A screening runs six to ten questions, and a candidate
 // may refer back to something they said early on, so the window has to hold the
@@ -22,42 +23,15 @@ const MAX_TOOL_CHAIN = 4;
 // only fires in CANDIDATE_QA, where the only thing left to do is stop.
 const CLOSING_REMARK = /(have a (good|great|nice) (day|evening|one)|thank you for your time|thanks for your time|that(’s|'s| is) all (for now|from my side)|that(’s|'s| is) everything from my side|good ?bye|take care|dhanyavaad|dhanyawad|shukriya|alvida)/i;
 
-/**
- * How hard the questions should be.
- *
- * Length and depth used to be fixed in this prompt — the same "six to ten
- * questions" for a fresher QA role and a staff engineer. Difficulty is a
- * per-job setting now, and this turns it into instructions a model can act on
- * rather than an adjective it has to interpret.
- */
-const DIFFICULTY_GUIDANCE = {
-  easy:
-    'Keep questions straightforward and confidence-building. Ask what they have done, not how they would redesign it. ' +
-    'Accept a good-enough answer and move on; do not push for depth they have not claimed.',
-  moderate:
-    'Ask about real work on their CV and follow up once for specifics — numbers, tools, their own part in it. ' +
-    'Push back gently on vague answers, but do not interrogate.',
-  hard:
-    'Probe for depth. For each significant claim, ask how it was done and what the trade-offs were. ' +
-    'Follow up twice where an answer stays abstract, and ask about failures and what they changed afterwards.',
-  expert:
-    'Interview at senior-hire depth. Expect precise reasoning about trade-offs, scale and failure modes. ' +
-    'Challenge claims that do not hold together, and ask what they would do differently with hindsight. ' +
-    'Stay courteous: rigorous is not hostile.',
-};
-
 /** Per-job interview settings, with the defaults used when none are set. */
 function interviewSettings(session) {
-  const p = session.interviewProtocol ?? {};
-  const minQuestions = Number(p.minQuestions) || 6;
-  const maxQuestions = Math.max(Number(p.maxQuestions) || 10, minQuestions);
-  return {
-    minQuestions,
-    maxQuestions,
-    durationMinutes: Number(p.durationMinutes) || 10,
-    difficulty: DIFFICULTY_GUIDANCE[p.difficulty] ? p.difficulty : 'moderate',
-    focusAreas: Array.isArray(p.focusAreas) ? p.focusAreas.filter(Boolean) : [],
-  };
+  return interviewOptionsFrom(session.interviewProtocol);
+}
+
+/** The name she gives on calls: the Identity setting, else Pratibha. */
+export function agentNameFor(session) {
+  const name = session?.interviewProtocol?.agentName;
+  return typeof name === 'string' && name.trim() ? name.trim() : 'Pratibha';
 }
 
 
@@ -88,17 +62,18 @@ export function identityConfirmed(session) {
  */
 export function makeDisclosure(session, { personalise = true } = {}) {
   const named = personalise && session?.candidate?.name;
+  const agent = agentNameFor(session);
 
   if (session?.tenant?.name && session?.job?.title && named) {
     return `Hello ${session.candidate.name}, thanks for calling ${session.tenant.name}. ` +
-      `My name is Pratibha, and I'm an AI hiring assistant — not a human. ` +
+      `My name is ${agent}, and I'm an AI hiring assistant — not a human. ` +
       `I'm here to run the first-round conversation for the ${session.job.title} role. ` +
       `This call may be recorded for review.`;
   }
 
   if (session?.tenant?.name) {
     return `Hello, thanks for calling ${session.tenant.name}. ` +
-      `My name is Pratibha, and I'm an AI hiring assistant — not a human. ` +
+      `My name is ${agent}, and I'm an AI hiring assistant — not a human. ` +
       `I'm here to run first-round conversations with shortlisted candidates. ` +
       `This call may be recorded for review.`;
   }
@@ -123,40 +98,6 @@ const STAGE_GUIDANCE = {
   [STATES.CANDIDATE_QA]: 'Invite any questions they have about the role or the process.'
 };
 
-const BASE_PROMPT = `You are Pratibha, an AI hiring assistant for {{tenantName}}.
-You run first-round screening conversations with candidates who call you. You never call anyone.
-
-HOW YOU SPEAK
-- Everything you write is spoken aloud down a phone line. Plain spoken sentences only: no markdown, no bullet points, no headings, no emoji.
-- Warm, professional, concise. One or two sentences per turn. This is a conversation, not a form.
-- Ask one question at a time and let them finish answering.
-- Numbers, codes and dates should be written the way you would say them aloud.
-{{languageHint}}
-
-THE CALL HAS ALREADY OPENED
-- A fixed greeting has ALREADY been spoken to this caller before your first turn. It gave your name, said you are an AI and not a human, named the company and the role, and said the call may be recorded. They have heard all of it.
-- Therefore: never greet them again, never introduce yourself again, and never restate the company or the role as though it were news. No "Hello", no "Hi", no "This is Pratibha from...", no "I am the AI hiring assistant" - not on your first turn, and not on any later turn.
-- Your first turn continues the conversation from where the greeting left off. Go straight to what that stage of the call needs, in one or two sentences.
-
-WHAT YOU MUST NEVER DO
-- Never state or imply a salary figure, a joining date, a start date, or that an offer will follow.
-- Never say whether the candidate has passed, done well, or done badly. You do not decide anything.
-- Never evaluate an answer out loud, even favourably. "That's a solid improvement", "good answer", "that's impressive" are all forbidden. Acknowledge with something neutral - "got it", "thanks", "understood" - and move on.
-- Never tell a candidate they misunderstood you, did not answer, or answered the wrong question. Never correct them.
-- Ask any given question at most twice. If their second answer still does not address it, let it go, move to a different criterion, and record it as not covered when you finish. Three attempts at the same question is an interrogation, not a screening, and it is the fastest way to lose a good candidate.
-- If an answer wanders onto another topic, take what they gave you and move forward from there rather than steering them back.
-- Never discuss other candidates, how many people applied, or internal timelines.
-- Never promise that anyone will call them, and never imply you are transferring them to a person. You cannot transfer a call and nobody will phone them. Every follow-up happens by email.
-- If a tool result contains a "say_exactly" field, say exactly those words and add nothing to them, before or after. They are worded that way deliberately.
-- If you are asked something you do not know, say the team will follow up rather than guessing.
-- Never ask about, or take into account, their age, gender, marital status, religion, caste, region, or which college they attended.
-
-IF THINGS GO WRONG
-- They ask for a human: agree immediately and warmly, then escalate. Never deflect or try to talk them out of it.
-- They become hostile or distressed: close politely and escalate. Do not argue.
-- The line is too poor to continue: ask them to repeat once, then tell them to call back on a better connection.
-- You suspect you are not speaking to the candidate: confirm one detail from their CV, such as their current employer. If it does not match, close politely and escalate.`;
-
 export class ScreeningAgent {
   constructor(config, logger, toolExecutor) {
     this.config = config;
@@ -173,8 +114,19 @@ export class ScreeningAgent {
     });
   }
 
+  /**
+   * The system prompt, assembled from the active block library (I10): the
+   * fixed core, who the caller is, then one block per enabled option, then the
+   * hiring team's own words, and finally where the call has got to. The names
+   * of the blocks used are logged once per call, which is the preview of what
+   * a settings change actually did.
+   */
   buildSystemPrompt(session) {
     const settings = interviewSettings(session);
+    // Tests without a database get the shipped library via their setup file.
+    const library = session.promptBlocks ?? globalThis.__PRATIBHA_TEST_PROMPT_BLOCKS__;
+    if (!library?.blocks) throw new Error('No active interviewer prompt block library');
+
     // A per-job company name overrides the tenant's, so one workspace can hire
     // under more than one brand.
     const tenantName =
@@ -183,28 +135,23 @@ export class ScreeningAgent {
       ? `- Conduct this conversation in ${session.language === 'hi' ? 'Hindi' : 'Hinglish (Hindi words in Roman script, mixed with English)'}.`
       : '- Conduct this conversation in English (Indian). Use simple words because the line is noisy.';
 
-    const parts = [BASE_PROMPT.replace(/\{\{tenantName\}\}/g, tenantName).replace(/\{\{languageHint\}\}/g, languageHint)];
-
-    // Admin-defined protocols override instincts.
-    if (session.interviewProtocol?.instructionText) {
-      parts.push('PROTOCOLS SET BY THE HIRING TEAM. These override your other instincts.\n' +
-        session.interviewProtocol.instructionText);
-    }
+    const afterCore = [];
+    const verified = session.candidate && session.job && identityConfirmed(session);
 
     // Until the caller proves who they are, the model is not told who we think
     // they are. It cannot leak a name, an employer or a CV detail it was never
     // given, and a model instructed to keep a secret it can see will eventually
     // say it out loud.
     if (session.candidate && session.job && !identityConfirmed(session)) {
-      parts.push(`WHO YOU ARE SPEAKING TO
+      afterCore.push(`WHO YOU ARE SPEAKING TO
 Not yet established. Their number matches someone on the shortlist, but that only identifies the phone, not the person holding it.
 You do NOT know their name, employer, or anything on their CV, and you must not guess or imply any of it. Do not use a name at all this turn.
 Applying for: ${session.job.title}`);
     }
 
-    if (session.candidate && session.job && identityConfirmed(session)) {
+    if (verified) {
       const cv = session.candidate.cvParsed ?? {};
-      parts.push(`WHO YOU ARE SPEAKING TO
+      afterCore.push(`WHO YOU ARE SPEAKING TO
 Name: ${session.candidate.name ?? 'unknown'}
 Applying for: ${session.job.title}
 Their CV says: ${cv.rawPreview ?? JSON.stringify(cv)}
@@ -213,16 +160,34 @@ Skills: ${cvList(cv.skills).join(', ') || 'not extracted'}
 Education: ${cvList(cv.education).join('; ') || 'not extracted'}`);
     }
 
-    if (session.criteria?.length) {
-      parts.push(`WHAT YOU ARE SCREENING FOR
-${session.criteria.map(c => `- [id ${c.id}] ${c.criterion} (weight ${c.weight}/5). ${c.evaluation_guidance ?? ''}`).join('\n')}
+    // Interview content (role, questions, screeners, salary) only once the
+    // caller is verified; before that the core alone governs the call.
+    const options = verified
+      ? settings
+      : { ...settings, introduceRole: false, customQuestions: [], screeners: {}, candidateQuestions: false, hearBackDays: null };
 
-Cover every one of these at least once. Where you cannot, record why when you finish.
-Probe what is actually on their CV rather than asking generic questions.
-${settings.focusAreas.length ? `Give extra weight to these areas: ${settings.focusAreas.join(', ')}.\n` : ''}DEPTH FOR THIS ROLE (${settings.difficulty}): ${DIFFICULTY_GUIDANCE[settings.difficulty]}
-Aim for ${settings.minQuestions} to ${settings.maxQuestions} questions inside about ${settings.durationMinutes} minutes.
-You are gathering evidence, not marking it. The scoring happens after the call, by a separate process, against the criteria above.`);
+    const { text, used } = assembleInterviewPrompt(library, options, {
+      agentName: agentNameFor(session),
+      tenantName,
+      languageHint,
+      jdSummary: verified ? (session.latestApprovedJd?.bodyMd ?? null) : null,
+      criteriaList: verified && session.criteria?.length
+        ? session.criteria.map(c => `- [id ${c.id}] ${c.criterion} (weight ${c.weight}/5). ${c.evaluation_guidance ?? ''}`).join('\n')
+        : '',
+      gaps: verified ? (session.screeningGaps ?? []) : [],
+      jobLocation: session.job?.location ?? null,
+      bandMin: session.job?.salaryMin ?? null,
+      bandMax: session.job?.salaryMax ?? null,
+      afterCore,
+    });
+
+    const signature = `${library.version}:${used.join(',')}`;
+    if (session.promptSignature !== signature) {
+      session.promptSignature = signature;
+      session.transcript?.record('prompt.assembled', { libraryVersion: library.version, blocks: used.join(',') });
     }
+
+    const parts = [text];
 
     const remaining = session.deadlineAt
       ? Math.max(0, Math.round((session.deadlineAt - Date.now()) / 60000))
@@ -236,7 +201,10 @@ You are gathering evidence, not marking it. The scoring happens after the call, 
           : '')
       : '';
 
-    const stage = STAGE_GUIDANCE[session.state];
+    // With candidate questions switched off, the last stage only closes.
+    const stage = session.state === STATES.CANDIDATE_QA && !settings.candidateQuestions
+      ? 'Screening is finished. Close the call now as your closing instructions say, then call end_call.'
+      : STAGE_GUIDANCE[session.state];
     if (stage) parts.push(`WHAT THIS TURN IS FOR\n${stage}`);
 
     parts.push(`CURRENT STAGE OF THE CALL: ${session.state}${progress}

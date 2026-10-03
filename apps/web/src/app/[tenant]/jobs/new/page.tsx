@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { parseSalaryBand } from "@pratibha/shared";
 
 export default function NewJobPage({ params }: { params: { tenant: string } }) {
   const router = useRouter();
@@ -114,7 +115,13 @@ export default function NewJobPage({ params }: { params: { tenant: string } }) {
               value={salaryBand}
               onChange={(e) => setSalaryBand(e.target.value)}
               className={inputClass}
+              aria-describedby="salaryBand-read"
             />
+            {salaryBand.trim() && (
+              <p id="salaryBand-read" className="mt-1.5 text-xs text-[var(--text-muted)]">
+                {bandReading(salaryBand)}
+              </p>
+            )}
           </div>
           <div>
             <label htmlFor="experienceRange" className={labelClass}>
@@ -178,4 +185,14 @@ export default function NewJobPage({ params }: { params: { tenant: string } }) {
       </form>
     </div>
   );
+}
+
+/** I02: how the text band will be read into numbers for the salary policy. */
+function bandReading(text: string) {
+  const band = parseSalaryBand(text);
+  const r = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+  if (!band?.max) return "Not a band we can read as numbers. You can set the minimum and maximum on the role after saving.";
+  return band.min
+    ? `Read as ${r(band.min)} to ${r(band.max)} a year.`
+    : `Read as up to ${r(band.max)} a year.`;
 }

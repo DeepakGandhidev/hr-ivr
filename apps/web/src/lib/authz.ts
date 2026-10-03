@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { noteSessionOrigin } from "@/lib/session-origin";
 import { adminPrisma, withTenant } from "@pratibha/prisma";
 import { Action, AppError, can, ForbiddenError, logAuthzDenial, TenantMismatchError, UnauthorizedError, UserRole } from "@pratibha/shared";
 import type { User, Tenant, Plan, TrialConfig, PrismaClient } from "@pratibha/prisma";
@@ -68,6 +69,10 @@ export async function loadTenantContext(tenantSlug: string): Promise<RequestCont
   if ((PAUSED_STATUSES as readonly string[]).includes(found.status)) {
     throw new WorkspacePausedError();
   }
+
+  // P01/P16: the first browser request of a new session records where it
+  // came from. Background work; never awaited.
+  noteSessionOrigin(user.id);
 
   const trial = found.status === "trial" ? await currentTrial() : null;
   return { user, tenant: { ...found, trial } };

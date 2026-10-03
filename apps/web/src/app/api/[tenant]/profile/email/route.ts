@@ -3,6 +3,8 @@ import { Action, ValidationError, writeAuditLog } from "@pratibha/shared";
 import { authorizeTenant } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { createClient } from "@/lib/supabase/server";
+import { passwordMatches } from "@/lib/reauth";
+import { authDb } from "@/lib/auth-db";
 import { sendEmail } from "@/lib/email";
 import { z } from "zod";
 
@@ -46,11 +48,9 @@ export async function POST(
 
     const supabase = createClient();
 
-    const { error: reauthError } = await supabase.auth.signInWithPassword({
-      email: ctx.user.email,
-      password: parsed.data.currentPassword,
-    });
-    if (reauthError) {
+    // Checked on a throwaway client, so this browser keeps its own session
+    // (Batch 5, P01).
+    if (!(await passwordMatches(ctx.user.email, parsed.data.currentPassword))) {
       return NextResponse.json(
         { error: "INVALID_PASSWORD", message: "That is not your current password." },
         { status: 400 }
@@ -92,5 +92,71 @@ export async function POST(
       pendingEmail: nextEmail,
       message: `Check ${nextEmail} for a confirmation link. Your current address stays active until then.`,
     });
+  });
+}
+
+/**
+ * P14: an email change waiting for confirmation. GoTrue holds it on the auth
+ * user as email_change until the link is followed; this reads it back so the
+ * page can say so after a reload.
+ */
+async function pendingEmail(authUserId: string | null): Promise<string | null> {
+  if (!authUserId) return null;
+  const rows = await authDb.$queryRaw<{ email_change: string | null }[]>`
+    SELECT email_change FROM auth.users WHERE id = ${authUserId}::uuid`;
+  const pending = rows[0]?.email_change?.trim();
+  return pending ? pending : null;
+}
+
+export async function GET(request: NextRequest, { params }: { params: { tenant: string } }) {
+  return handleApi(async () => {
+    const { ctx } = await authorizeTenant(params.tenant, Action.candidateRead);
+    return { email: ctx.user.email, pendingEmail: await pendingEmail(ctx.user.authProviderId) };
+  });
+}
+
+/** Resend the confirmation for the pending change. */
+export async function PUT(request: NextRequest, { params }: { params: { tenant: string } }) {
+  return handleApi(async () => {
+    const { ctx } = await authorizeTenant(params.tenant, Action.candidateRead);
+    const pending = await pendingEmail(ctx.user.authProviderId);
+    if (!pending) throw new ValidationError("There is no email change waiting for confirmation.");
+    const { error } = await createClient().auth.resend({ type: "email_change", email: pending });
+    if (error) throw new ValidationError(error.message);
+    return { ok: true, pendingEmail: pending };
+  });
+}
+
+/**
+ * Cancel the pending change. GoTrue has no endpoint for this, so the pending
+ * fields are cleared on this user's own auth row; the links already sent stop
+ * working because their tokens are gone.
+ */
+export async function DELETE(request: NextRequest, { params }: { params: { tenant: string } }) {
+  return handleApi(async () => {
+    const { ctx, tx } = await authorizeTenant(params.tenant, Action.candidateRead);
+    if (!ctx.user.authProviderId) throw new ValidationError("There is no email change waiting for confirmation.");
+    const pending = await pendingEmail(ctx.user.authProviderId);
+    await authDb.$executeRaw`
+      UPDATE auth.users
+      SET email_change = '', email_change_token_new = '', email_change_token_current = '',
+          email_change_confirm_status = 0, email_change_sent_at = NULL
+      WHERE id = ${ctx.user.authProviderId}::uuid`;
+    // Newer GoTrue keeps the link tokens in their own table as well.
+    await authDb.$executeRaw`
+      DELETE FROM auth.one_time_tokens
+      WHERE user_id = ${ctx.user.authProviderId}::uuid
+        AND token_type::text IN ('email_change_token_new', 'email_change_token_current')`.catch(() => 0);
+    await tx(async (db) => {
+      await writeAuditLog(db, {
+        tenantId: ctx.tenant.id,
+        actor: ctx.user.id,
+        action: "user.email.change_cancelled",
+        entity: "user",
+        entityId: ctx.user.id,
+        before: { pendingEmail: pending },
+      });
+    });
+    return { ok: true };
   });
 }

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Action, UserRole, can } from "@pratibha/shared";
-import { daysRemaining, planComparison, TOP_UP_PACKS } from "@/lib/subscription";
+import { daysRemaining, planComparison } from "@/lib/subscription";
 import { manualProvider, paymentProvider } from "@/lib/payments";
 
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -59,22 +59,29 @@ describe("cycle", () => {
   });
 });
 
+// Plans are published rows since the admin panel (Batch 9), not constants.
+type PlanRow = Parameters<typeof planComparison>[0] & object;
+const plan = (key: string, priceInr: number, minutes: number): PlanRow =>
+  ({ id: key, key, version: 1, name: key, priceInr, slashedPriceInr: null, minutes, screenings: 100, jobLimit: null }) as unknown as PlanRow;
+const starter = plan("starter", 1999, 300);
+const growth = plan("growth", 4999, 800);
+const scale = plan("scale", 9999, 2000);
+
 describe("plan comparison", () => {
   it("names the direction of a change", () => {
-    expect(planComparison("starter", "growth", 0)?.direction).toBe("upgrade");
-    expect(planComparison("scale", "starter", 0)?.direction).toBe("downgrade");
+    expect(planComparison(starter, growth, 0)?.direction).toBe("upgrade");
+    expect(planComparison(scale, starter, 0)?.direction).toBe("downgrade");
   });
 
   // A downgrade can put a customer below what they have already spent this
   // period. Better said before the change than discovered at a failed call.
   it("warns when the new ceiling is already behind them", () => {
-    const down = planComparison("scale", "starter", 900);
-    expect(down?.alreadyOverTarget).toBe(true);
-    expect(planComparison("scale", "starter", 10)?.alreadyOverTarget).toBe(false);
+    expect(planComparison(scale, starter, 900)?.alreadyOverTarget).toBe(true);
+    expect(planComparison(scale, starter, 10)?.alreadyOverTarget).toBe(false);
   });
 
-  it("refuses an unknown plan", () => {
-    expect(planComparison("starter", "enterprise", 0)).toBe(null);
+  it("refuses a plan that does not exist", () => {
+    expect(planComparison(starter, null, 0)).toBe(null);
   });
 });
 
@@ -124,8 +131,10 @@ describe("top-ups", () => {
     expect(count).toBeLessThan(create);
   });
 
+  // The packs on sale are the ones published in the admin panel.
   it("only sells published packs", () => {
-    expect(TOP_UP_PACKS.every((p) => p.minutes > 0 && p.pricePaise > 0)).toBe(true);
+    const lib = read("src/lib/subscription.ts");
+    expect(lib).toContain("const packs = await livePacks(tx)");
   });
 });
 

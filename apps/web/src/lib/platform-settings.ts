@@ -15,6 +15,10 @@ export interface PlatformSettings {
   screenerSeconds: number;
   pageSize: number;
   descriptionCap: number;
+  legalNameMax: number;
+  addressLineMax: number;
+  cityMax: number;
+  logoMaxBytes: number;
   portalPostsGate: string;
   interviewTuningGate: string;
 }
@@ -25,7 +29,11 @@ const DEFAULTS: PlatformSettings = {
   scoreGapThreshold: 2.0,
   screenerSeconds: 30,
   pageSize: 25,
-  descriptionCap: 5000,
+  descriptionCap: 600,
+  legalNameMax: 200,
+  addressLineMax: 300,
+  cityMax: 100,
+  logoMaxBytes: 2 * 1024 * 1024,
   portalPostsGate: "all",
   interviewTuningGate: "all",
 };
@@ -37,6 +45,10 @@ const KEYS: Record<string, keyof PlatformSettings> = {
   "interview.screener_seconds": "screenerSeconds",
   "lists.page_size": "pageSize",
   "company.description_cap": "descriptionCap",
+  "company.legal_name_max": "legalNameMax",
+  "company.address_line_max": "addressLineMax",
+  "company.city_max": "cityMax",
+  "company.logo_max_bytes": "logoMaxBytes",
   "gate.portal_posts": "portalPostsGate",
   "gate.interview_tuning": "interviewTuningGate",
 };

@@ -1,5 +1,5 @@
 import type { Prisma, Tenant, Subscription, PaymentKind, PaymentStatus } from "@pratibha/prisma";
-import { calculateInvoice, financialYear, nextInvoiceNumber, gstStateCode } from "@pratibha/shared";
+import { calculateInvoice, financialYear, formatAddress, nextInvoiceNumber, gstStateCode } from "@pratibha/shared";
 import type { Tx } from "@/lib/db";
 
 /**
@@ -107,7 +107,11 @@ export async function issueInvoice(
       seller: { ...seller, stateCode: gstStateCode(seller.state) },
       buyer: {
         legalName: profile?.legalName ?? tenant.name,
-        address: profile?.billingAddress ?? null,
+        address:
+          // The state prints on its own line, so it is left out of the block.
+          formatAddress({ addressLine: profile?.addressLine, city: profile?.city, pinCode: profile?.pinCode }) ??
+          profile?.billingAddress ??
+          null,
         state: profile?.billingState ?? null,
         stateCode: gstStateCode(profile?.billingState),
         gstin: profile?.gstin ?? null,

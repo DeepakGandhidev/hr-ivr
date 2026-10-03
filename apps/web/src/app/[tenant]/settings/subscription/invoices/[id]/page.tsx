@@ -107,7 +107,7 @@ export default async function InvoicePage({
           <div>
             <h2>To</h2>
             <p className="party-name">{invoice.buyer.legalName ?? "—"}</p>
-            {invoice.buyer.address && <p className="party-line">{invoice.buyer.address}</p>}
+            {invoice.buyer.address && <p className="party-line" style={{ whiteSpace: "pre-line" }}>{invoice.buyer.address}</p>}
             <p className="party-line">State: {invoice.buyer.state ?? "—"}</p>
             <p className="party-line">GSTIN: {invoice.buyer.gstin ?? <em>unregistered</em>}</p>
           </div>

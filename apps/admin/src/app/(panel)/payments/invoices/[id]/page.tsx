@@ -50,7 +50,7 @@ export default async function InvoicePage({ params }: { params: { id: string } }
         <div style={{ margin: "22px 0", fontSize: 13 }}>
           <div className="label">Billed to</div>
           <b>{buyer.legalName}</b>
-          {buyer.address && <div>{buyer.address}</div>}
+          {buyer.address && <div style={{ whiteSpace: "pre-line" }}>{buyer.address}</div>}
           <div>{buyer.state ?? "State not on file"}{buyer.stateCode ? ` (${buyer.stateCode})` : ""}</div>
           <div>GSTIN {buyer.gstin ?? "not provided"}</div>
           <div style={{ marginTop: 6 }}>Place of supply: {inv.placeOfSupply}</div>

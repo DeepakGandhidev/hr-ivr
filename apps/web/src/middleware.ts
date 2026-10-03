@@ -11,6 +11,7 @@ const PUBLIC_PATHS = [
   "/api/public/",
   "/reset-password",
   "/j/",
+  "/careers/",
   "/webhook/",
   "/_next/",
   "/favicon.ico",

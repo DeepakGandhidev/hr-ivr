@@ -4,6 +4,7 @@ import { requireAdmin } from "@/lib/auth/session";
 import { findCandidates } from "@/lib/calls";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 /** Find candidate: every workspace, by number. Read only. */
 export async function GET(request: NextRequest) {

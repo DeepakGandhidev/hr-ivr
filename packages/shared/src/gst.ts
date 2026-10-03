@@ -70,3 +70,23 @@ export function stateFromGstin(gstin: string): string | null {
   const code = gstin.trim().slice(0, 2);
   return GST_STATES.find((s) => s.code === code)?.name ?? null;
 }
+
+/** An Indian PIN code: six digits, the first never 0. Nothing else. */
+export function isValidPin(value: string): boolean {
+  return /^[1-9][0-9]{5}$/.test(value.trim());
+}
+
+/**
+ * The registered address as one printable block, from its parts. One place,
+ * so the invoice, the careers page and anything else agree on the format.
+ */
+export function formatAddress(parts: {
+  addressLine?: string | null;
+  city?: string | null;
+  pinCode?: string | null;
+  state?: string | null;
+}): string | null {
+  const cityPin = [parts.city?.trim(), parts.pinCode?.trim()].filter(Boolean).join(" ");
+  const lines = [parts.addressLine?.trim(), cityPin, parts.state?.trim()].filter(Boolean);
+  return lines.length ? lines.join("\n") : null;
+}

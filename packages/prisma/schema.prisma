@@ -166,7 +166,13 @@ model CompanyProfile {
   legalName      String? @map("legal_name")
   /// Registered / billing address, free-form: Indian addresses do not fit
   /// fixed fields, and an invoice needs it as written.
+  /// The whole address as one block, composed from the parts below on every
+  /// save. Kept for readers that predate the structured fields.
   billingAddress String? @map("billing_address")
+  /// Structured registered address (Batch 8, CP20).
+  addressLine    String? @map("address_line")
+  city           String?
+  pinCode        String? @map("pin_code")
   /// State, which decides CGST+SGST versus IGST on an invoice. Held separately
   /// from the address because it is a calculation input, not decoration.
   billingState   String? @map("billing_state")

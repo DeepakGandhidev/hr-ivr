@@ -734,3 +734,60 @@
   .why-cell { flex: 1 1 auto; }
   .score-cell { flex-direction: row; align-items: center; }
 }
+
+/* ===========================================================================
+   Company profile (Batch 8) — "Company profile, proposed".
+   =========================================================================== */
+.cp-sub { margin: 5px 0 0; font-size: 14px; color: var(--jm-muted); }
+.cp-card {
+  background: var(--jm-paper); border: 1px solid var(--jm-line); border-radius: 14px;
+  padding: 20px 24px; display: flex; flex-direction: column; gap: 16px;
+}
+.cp-card-title { font-size: 15px; font-weight: 700; color: var(--jm-indigo); }
+.cp-card-sub { font-size: 12.5px; color: var(--jm-muted); margin-top: 2px; }
+.cp-logo-row { display: flex; gap: 20px; align-items: flex-start; }
+.cp-logo { display: flex; flex-direction: column; align-items: center; gap: 6px; flex-shrink: 0; }
+/* Always white: the logo is shown to candidates on white, in both themes. */
+.cp-logo-tile {
+  width: 150px; height: 84px; border: 1px solid var(--jm-line-2); border-radius: 10px; background: #FFFFFF;
+  display: flex; align-items: center; justify-content: center; padding: 10px; box-sizing: border-box; overflow: hidden;
+}
+.cp-logo-tile img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.cp-logo-fallback { font-weight: 800; font-size: 15px; color: #1E1B4B; text-align: center; line-height: 1.2; }
+.cp-logo-links { display: flex; gap: 10px; font-size: 12px; }
+.cp-logo-links button { background: none; border: none; padding: 0; font: inherit; cursor: pointer; color: var(--jm-indigo); font-weight: 600; }
+.cp-logo-links button.quiet { color: var(--jm-muted); font-weight: 400; }
+.cp-logo-links button:disabled { opacity: 0.5; cursor: not-allowed; }
+.cp-field { display: flex; flex-direction: column; min-width: 0; }
+.jm .cp-field > label { font-size: 12.5px; font-weight: 600; color: var(--jm-muted); margin-bottom: 4px; }
+.jm .cp-field :is(input, textarea, select) {
+  width: 100%; border: 1px solid var(--jm-field); border-radius: 10px; padding: 9px 13px;
+  font-size: 13.5px; font-family: inherit; box-sizing: border-box; background: var(--jm-paper); color: var(--jm-ink);
+}
+.jm .cp-field textarea { min-height: 64px; resize: vertical; }
+.jm .cp-field input.mono { font-family: var(--mono, ui-monospace, monospace); }
+.jm .cp-field :is(input, textarea).invalid { border-color: var(--jm-clay); }
+.cp-help { font-size: 12px; color: var(--jm-muted); margin-top: 4px; }
+.cp-help.ok { color: var(--jm-green); }
+.cp-help.bad { color: var(--jm-clay); }
+.cp-count { float: right; }
+.cp-warning {
+  margin-top: 6px; background: var(--jm-strip-bg); color: var(--jm-strip); border-radius: 10px;
+  padding: 9px 12px; font-size: 12.5px; line-height: 1.45;
+}
+.cp-careers { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--jm-line-2); padding-top: 14px; flex-wrap: wrap; }
+.cp-careers-label { font-size: 12.5px; font-weight: 600; color: var(--jm-muted); white-space: nowrap; }
+.cp-careers-url {
+  flex: 1 1 260px; min-width: 0; border: 1px solid var(--jm-field); background: var(--jm-head); border-radius: 10px;
+  padding: 9px 13px; font-size: 13px; font-family: var(--mono, ui-monospace, monospace); color: var(--jm-body);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cp-grid-2 { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 14px; }
+.cp-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 760px) {
+  .cp-grid-2, .cp-grid-3 { grid-template-columns: minmax(0, 1fr); }
+  .cp-logo-row { flex-direction: column; }
+}
+.cp-foot { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.cp-foot-text { font-size: 12.5px; color: var(--jm-muted); }
+.cp-save { padding: 12px 24px; font-size: 14px; }

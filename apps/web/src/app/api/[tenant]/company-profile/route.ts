@@ -5,6 +5,8 @@ import {
   writeAuditLog,
   isValidGstin,
   stateFromGstin,
+  isValidPin,
+  formatAddress,
   GST_STATES,
 } from "@pratibha/shared";
 import { authorizeTenant, withTenantAuth } from "@/lib/authz";
@@ -12,15 +14,20 @@ import { handleApi } from "@/lib/api-errors";
 import { z } from "zod";
 import { deleteAsset } from "@/lib/storage";
 import { platformSettings } from "@/lib/platform-settings";
+import { gstinMismatchWarning } from "@/lib/company-copy";
 
 export const runtime = "nodejs";
 
+// Lengths are generous outer bounds here; the real limits are platform settings
+// (DB config), checked below, so they can change without a deploy.
 const profileSchema = z.object({
-  legalName: z.string().trim().max(200).nullable().optional(),
-  billingAddress: z.string().trim().max(2000).nullable().optional(),
+  legalName: z.string().trim().max(1000).nullable().optional(),
+  addressLine: z.string().trim().max(2000).nullable().optional(),
+  city: z.string().trim().max(1000).nullable().optional(),
+  pinCode: z.string().trim().max(20).nullable().optional(),
   billingState: z.string().trim().max(100).nullable().optional(),
   gstin: z.string().trim().max(20).nullable().optional(),
-  description: z.string().trim().max(5000).nullable().optional(),
+  description: z.string().trim().max(20000).nullable().optional(),
   logoAssetId: z.string().trim().nullable().optional(),
 });
 
@@ -39,9 +46,10 @@ export async function GET(
   const { tenant } = params;
   return handleApi(() =>
     withTenantAuth(tenant, Action.settingsRead, async (ctx, tx) => {
-      const profile = await tx.companyProfile.findUnique({
-        where: { tenantId: ctx.tenant.id },
-      });
+      const [profile, settings] = await Promise.all([
+        tx.companyProfile.findUnique({ where: { tenantId: ctx.tenant.id } }),
+        platformSettings(),
+      ]);
 
       return {
         // Absent and empty mean the same thing, so a missing row is returned as
@@ -50,6 +58,9 @@ export async function GET(
           tenantId: ctx.tenant.id,
           legalName: null,
           billingAddress: null,
+          addressLine: null,
+          city: null,
+          pinCode: null,
           billingState: null,
           gstin: null,
           description: null,
@@ -57,7 +68,16 @@ export async function GET(
         },
         /// The spoken name, so the form can point at where it is edited.
         workspaceName: ctx.tenant.name,
+        slug: ctx.tenant.slug,
         states: GST_STATES,
+        /// Field limits, from platform settings, so the form and the API agree.
+        limits: {
+          legalName: settings.legalNameMax,
+          addressLine: settings.addressLineMax,
+          city: settings.cityMax,
+          description: settings.descriptionCap,
+          logoBytes: settings.logoMaxBytes,
+        },
       };
     })
   );
@@ -75,37 +95,39 @@ export async function PATCH(
     }
 
     const data = parsed.data;
+    const settings = await platformSettings();
+    const tooLong = (value: string | null | undefined, max: number, what: string) => {
+      if (value && value.length > max) throw new ValidationError(`Keep the ${what} under ${max} characters.`);
+    };
+    tooLong(data.legalName, settings.legalNameMax, "legal company name");
+    tooLong(data.addressLine, settings.addressLineMax, "address line");
+    tooLong(data.city, settings.cityMax, "city");
+    tooLong(data.description, settings.descriptionCap, "company description");
 
-    // Format only. A well-formed GSTIN can still belong to nobody — only the
-    // GST portal knows — so this rejects typos and says no more than that.
+    if (data.billingState && !GST_STATES.some((s) => s.name === data.billingState)) {
+      throw new ValidationError("Choose a state from the list.");
+    }
+
+    // CP23: six digits, nothing else.
+    if (data.pinCode) {
+      if (!isValidPin(data.pinCode)) throw new ValidationError("A PIN code is six digits.");
+      data.pinCode = data.pinCode.trim();
+    }
+
+    // Format blocks saving. A well-formed GSTIN can still belong to nobody (only
+    // the GST portal knows), so this rejects typos and says no more than that.
+    let warning: string | null = null;
     if (data.gstin) {
       const gstin = data.gstin.toUpperCase();
       if (!isValidGstin(gstin)) {
         throw new ValidationError(
-          "That GSTIN is not in the right format. It should be 15 characters, e.g. 27AAPFU0939F1ZV."
+          "That GSTIN is not in the right format. It should be 15 characters, e.g. 07AASFP3808P2ZF."
         );
       }
       data.gstin = gstin;
-
-      // The first two digits of a GSTIN are the state. A GSTIN disagreeing with
-      // the billing state means one of them is wrong, and the invoice would
-      // then compute the wrong CGST/SGST-versus-IGST split.
-      const declared = stateFromGstin(gstin);
-      if (declared && data.billingState && declared !== data.billingState) {
-        throw new ValidationError(
-          `That GSTIN is registered in ${declared}, but the billing state says ${data.billingState}.`
-        );
-      }
-      if (declared && !data.billingState) data.billingState = declared;
     }
 
     const { ctx, tx } = await authorizeTenant(tenant, Action.settingsUpdate);
-
-    // The length cap is a platform setting, so it can change without a deploy.
-    const { descriptionCap } = await platformSettings();
-    if (data.description && data.description.length > descriptionCap) {
-      throw new ValidationError(`Keep the company description under ${descriptionCap} characters.`);
-    }
 
     return tx(async (db) => {
       // Checked rather than trusted: without this, any asset id in the tenant —
@@ -122,11 +144,33 @@ export async function PATCH(
 
       const before = await db.companyProfile.findUnique({ where: { tenantId: ctx.tenant.id } });
 
+      // The single address block older readers use, kept in step with the parts.
+      const merged = {
+        addressLine: data.addressLine !== undefined ? data.addressLine : before?.addressLine,
+        city: data.city !== undefined ? data.city : before?.city,
+        pinCode: data.pinCode !== undefined ? data.pinCode : before?.pinCode,
+        state: data.billingState !== undefined ? data.billingState : before?.billingState,
+      };
+      const addressTouched = ["addressLine", "city", "pinCode", "billingState"].some(
+        (k) => (data as Record<string, unknown>)[k] !== undefined
+      );
+      const write = { ...data, ...(addressTouched ? { billingAddress: formatAddress(merged) } : {}) };
+
       const profile = await db.companyProfile.upsert({
         where: { tenantId: ctx.tenant.id },
-        update: data,
-        create: { tenantId: ctx.tenant.id, ...data },
+        update: write,
+        create: { tenantId: ctx.tenant.id, ...write },
       });
+
+      // A GSTIN whose state code disagrees with the selected state saves (the
+      // user must be able to correct either field) but comes back with the
+      // persistent warning, because invoices would charge the wrong tax.
+      if (profile.gstin && profile.billingState) {
+        const declared = stateFromGstin(profile.gstin);
+        if (declared && declared !== profile.billingState) {
+          warning = gstinMismatchWarning(profile.gstin.slice(0, 2), declared, profile.billingState);
+        }
+      }
 
       // A replaced logo is deleted, row and bytes. Otherwise every re-upload
       // leaves an orphan on disk that nothing points at and nobody can tell is
@@ -149,7 +193,7 @@ export async function PATCH(
         after: redact(profile),
       });
 
-      return { profile };
+      return { profile, warning };
     });
   });
 }
@@ -161,7 +205,9 @@ function redact(profile: Record<string, unknown>) {
     billingState: profile.billingState ?? null,
     gstin: profile.gstin ?? null,
     logoAssetId: profile.logoAssetId ?? null,
-    hasAddress: Boolean(profile.billingAddress),
+    city: profile.city ?? null,
+    pinCode: profile.pinCode ?? null,
+    hasAddress: Boolean(profile.addressLine || profile.billingAddress),
     hasDescription: Boolean(profile.description),
   };
 }

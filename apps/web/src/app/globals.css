@@ -178,9 +178,17 @@ code {
 
 label { display: block; font-weight: 550; font-size: 13px; margin-bottom: 5px; color: var(--text); }
 
-input[type="text"], input[type="email"], input[type="password"],
+/* CP01 (and Batch 5's P02): a label's own text sits on its own line above the
+   field. Written as <label><span>Name</span><input/></label> across settings,
+   the span was inline, so the label ran straight into the value. */
+label > span:first-child:not(.chip):not(.visually-hidden) { display: block; margin-bottom: 5px; }
+
+/* An <input> with no type attribute is a text input too. Missing it here left
+   such fields with Tailwind's reset only: no border, no padding, reading as
+   plain text glued to their label. */
+input:not([type]), input[type="text"], input[type="email"], input[type="password"],
 input[type="number"], input[type="time"], input[type="url"],
-input[type="search"], select, textarea {
+input[type="search"], input[type="tel"], select, textarea {
   width: 100%;
   padding: 8px 11px;
   font: inherit;

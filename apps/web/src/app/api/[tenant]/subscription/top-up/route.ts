@@ -6,6 +6,7 @@ import {
   calculateInvoice,
   nextInvoiceNumber,
   financialYear,
+  formatAddress,
 } from "@pratibha/shared";
 import { authorizeTenant } from "@/lib/authz";
 import { Prisma } from "@pratibha/prisma";
@@ -67,7 +68,7 @@ export async function POST(
 
       const profile = await db.companyProfile.findUnique({
         where: { tenantId: ctx.tenant.id },
-        select: { legalName: true, billingAddress: true, billingState: true, gstin: true },
+        select: { legalName: true, billingAddress: true, addressLine: true, city: true, pinCode: true, billingState: true, gstin: true },
       });
 
       const totals = calculateInvoice({
@@ -114,7 +115,13 @@ export async function POST(
           seller: { ...seller },
           buyer: {
             legalName: profile?.legalName ?? ctx.tenant.name,
-            address: profile?.billingAddress ?? null,
+            // The structured address (CP24), falling back to the older single
+            // block for a profile nobody has re-saved since.
+            address:
+              // The state prints on its own line, so it is left out of the block.
+          formatAddress({ addressLine: profile?.addressLine, city: profile?.city, pinCode: profile?.pinCode }) ??
+              profile?.billingAddress ??
+              null,
             state: profile?.billingState ?? null,
             gstin: profile?.gstin ?? null,
           },

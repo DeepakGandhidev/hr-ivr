@@ -5,6 +5,7 @@ import Link from "next/link";
 import MarkdownEditor from "@/components/MarkdownEditor";
 import { JobShellError, JobTabHeader, JobTabs, useJobSummary } from "@/components/JobShell";
 import Time from "@/components/Time";
+import { useCopy } from "@/lib/copy-client";
 
 interface JobDescription {
   id: string;
@@ -24,6 +25,7 @@ const origin = (d: JobDescription) => (d.generatedBy === "ai" ? "AI drafted" : "
  * markdown syntax unless they choose to edit it.
  */
 export default function JdStudioPage({ params }: { params: { tenant: string; id: string } }) {
+  const t = useCopy();
   const { tenant, id } = params;
   const { summary, error: summaryError, refresh } = useJobSummary();
   const [versions, setVersions] = useState<JobDescription[]>([]);
@@ -131,8 +133,8 @@ export default function JdStudioPage({ params }: { params: { tenant: string; id:
   return (
     <div className="jm">
       <JobTabHeader
-        title="JD Studio"
-        intro="Write or generate the description, save it as a version, then approve it. Only an approved version can be published."
+        title={t("copy.portal.job.tab_studio")}
+        intro={t("copy.portal.job.studio.intro")}
       />
       <JobTabs active="studio" />
 

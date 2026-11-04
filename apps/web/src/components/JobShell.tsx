@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { plural } from "@/lib/format";
 import Time from "@/components/Time";
+import { useCopy } from "@/lib/copy-client";
 
 // ---------------------------------------------------------------------------
 // Types — the shape of GET /api/[tenant]/jobs/[id]/summary
@@ -240,21 +241,22 @@ export type JobTab = "studio" | "candidates" | "shortlist" | "publish" | "interv
 
 export function JobTabs({ active }: { active: JobTab }) {
   const { tenant, jobId, summary } = useJobSummary();
+  const copy = useCopy();
   const c = summary?.counts;
   const base = `/${tenant}/jobs/${jobId}`;
   // countLabel takes the count so a screen reader hears "1 candidate", not "1 candidates".
   const tabs: Array<{ key: JobTab; label: string; href: string; count?: number; countLabel?: (n: number) => string }> = [
-    { key: "studio", label: "JD Studio", href: base },
-    { key: "candidates", label: "Candidates", href: `${base}/candidates`, count: c?.applications, countLabel: (n) => plural(n, "candidate") },
+    { key: "studio", label: copy("copy.portal.job.tab_studio"), href: base },
+    { key: "candidates", label: copy("copy.portal.job.tab_candidates"), href: `${base}/candidates`, count: c?.applications, countLabel: (n) => plural(n, "candidate") },
     {
       key: "shortlist",
-      label: "Shortlist",
+      label: copy("copy.portal.job.tab_shortlist"),
       href: `${base}/shortlist`,
       count: c?.awaitingApproval,
       countLabel: (n) => `${n} waiting for approval`,
     },
-    { key: "publish", label: "Publish", href: `${base}/publish` },
-    { key: "interviews", label: "Interviews", href: `${base}/interviews`, count: c?.interviewed, countLabel: (n) => `${n} interviewed` },
+    { key: "publish", label: copy("copy.portal.job.tab_publish"), href: `${base}/publish` },
+    { key: "interviews", label: copy("copy.portal.job.tab_interviews"), href: `${base}/interviews`, count: c?.interviewed, countLabel: (n) => `${n} interviewed` },
   ];
 
   return (

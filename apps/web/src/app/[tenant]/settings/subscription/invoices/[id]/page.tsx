@@ -8,6 +8,8 @@ interface Line {
   quantity: number;
   unitPaise: number;
   amountPaise: number;
+  /** Recorded at issue time; invoices issued before it was recorded were at 18%. */
+  gstRatePercent?: number;
 }
 
 interface Party {
@@ -69,6 +71,8 @@ export default async function InvoicePage({
   }
 
   const intraState = invoice.cgstPaise > 0 || invoice.sgstPaise > 0;
+  // The rate this invoice was issued at, never today's setting.
+  const rate = invoice.lines.find((l) => typeof l.gstRatePercent === "number")?.gstRatePercent ?? 18;
 
   return (
     <div className="invoice-page">
@@ -107,7 +111,7 @@ export default async function InvoicePage({
           <div>
             <h2>To</h2>
             <p className="party-name">{invoice.buyer.legalName ?? "—"}</p>
-            {invoice.buyer.address && <p className="party-line">{invoice.buyer.address}</p>}
+            {invoice.buyer.address && <p className="party-line" style={{ whiteSpace: "pre-line" }}>{invoice.buyer.address}</p>}
             <p className="party-line">State: {invoice.buyer.state ?? "—"}</p>
             <p className="party-line">GSTIN: {invoice.buyer.gstin ?? <em>unregistered</em>}</p>
           </div>
@@ -157,17 +161,17 @@ export default async function InvoicePage({
             {intraState ? (
               <>
                 <tr>
-                  <th>CGST @ 9%</th>
+                  <th>CGST @ {rate / 2}%</th>
                   <td className="num">{formatInr(invoice.cgstPaise)}</td>
                 </tr>
                 <tr>
-                  <th>SGST @ 9%</th>
+                  <th>SGST @ {rate / 2}%</th>
                   <td className="num">{formatInr(invoice.sgstPaise)}</td>
                 </tr>
               </>
             ) : (
               <tr>
-                <th>IGST @ 18%</th>
+                <th>IGST @ {rate}%</th>
                 <td className="num">{formatInr(invoice.igstPaise)}</td>
               </tr>
             )}

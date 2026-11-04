@@ -1,4 +1,4 @@
-import { AVERAGE_INTERVIEW_MINUTES } from './constants.js';
+import { averageInterviewMinutes, quotaWarningThresholds } from './constants.js';
 
 /**
  * What a call costs, in minutes.
@@ -69,7 +69,8 @@ export function isBillableCall({
  */
 export function approximateInterviews(
   minutes: number,
-  averageMinutes: number = AVERAGE_INTERVIEW_MINUTES
+  // A default parameter is evaluated per call, so the panel's figure is current.
+  averageMinutes: number = averageInterviewMinutes()
 ): number {
   if (minutes <= 0 || averageMinutes <= 0) return 0;
   return Math.floor(minutes / averageMinutes);
@@ -81,7 +82,7 @@ export interface QuotaState {
   remaining: number | null;
   /** 0–1, or null when the plan is unmetered. */
   fraction: number | null;
-  /** null, 'warning' at 80%, 'exhausted' at 100%. */
+  /** null, 'warning' at 80% (billing.quota_warning_percent), 'exhausted' at 100%. */
   level: null | 'warning' | 'exhausted';
 }
 
@@ -99,12 +100,13 @@ export function quotaState(used: number, limit: number | null): QuotaState {
 
   const remaining = Math.max(0, limit - used);
   const fraction = limit > 0 ? used / limit : 1;
+  const [warnAt] = quotaWarningThresholds();
 
   return {
     used,
     limit,
     remaining,
     fraction,
-    level: fraction >= 1 ? 'exhausted' : fraction >= 0.8 ? 'warning' : null,
+    level: fraction >= 1 ? 'exhausted' : fraction >= warnAt ? 'warning' : null,
   };
 }

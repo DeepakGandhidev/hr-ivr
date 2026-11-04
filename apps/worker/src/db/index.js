@@ -1,10 +1,18 @@
 import { prisma } from '@pratibha/prisma';
-import { advanceCandidateStatus } from '@pratibha/shared';
+import { advanceCandidateStatus, parseBlockLibrary } from '@pratibha/shared';
 import { emailsMatch, normaliseSpokenEmail } from '../lib/emailMatch.js';
+import { notifyReportReady } from '../notify/reportReady.js';
 
 // Worker queries cross tenant boundaries for caller recognition, so this process
 // must connect with a Postgres role that bypasses RLS (e.g. Supabase service_role
 // or a local superuser). The web app uses withTenant() to enforce RLS per request.
+
+/**
+ * Archived and not-an-application candidates (Batch 7) are invisible to the
+ * line: a call from their number or email gets the standard refusal, because
+ * matching runs fresh on every call and simply never finds them.
+ */
+const ON_THE_LINE = { archivedAt: null, notApplicationAt: null };
 
 function normalizePhone(raw) {
   const s = String(raw ?? '').trim();
@@ -53,6 +61,66 @@ export function isApprovedFromRecord(candidate) {
 }
 
 /**
+ * Everything a call needs about the candidate it matched: the approved JD, the
+ * interview settings (the job's own, else the workspace default), the gaps
+ * their current screening flagged (I11), and the active prompt block library.
+ */
+async function callContext(candidate) {
+  const [latestApprovedJd, jobProtocol, tenantProtocol, screening, promptTemplate] = await Promise.all([
+    prisma.jobDescription.findFirst({
+      where: { jobId: candidate.jobId, approvedAt: { not: null } },
+      orderBy: { approvedAt: 'desc' },
+    }),
+    prisma.interviewProtocol.findUnique({
+      where: { tenantId_jobId: { tenantId: candidate.tenantId, jobId: candidate.jobId } },
+    }),
+    prisma.interviewProtocol.findFirst({
+      where: { tenantId: candidate.tenantId, jobId: null },
+      orderBy: { createdAt: 'desc' },
+    }),
+    // The current screening is the newest one against their current job.
+    prisma.screening.findFirst({
+      where: { candidateId: candidate.id, jobId: candidate.jobId },
+      orderBy: { createdAt: 'desc' },
+      select: { gaps: true },
+    }),
+    activePromptBlocks(),
+  ]);
+
+  return {
+    candidate,
+    job: candidate.job,
+    tenant: candidate.tenant,
+    latestApprovedJd,
+    callWindows: candidate.job.callWindows ?? [],
+    interviewProtocol: jobProtocol ?? tenantProtocol ?? null,
+    screeningGaps: Array.isArray(screening?.gaps) ? screening.gaps.filter((g) => typeof g === 'string' && g.trim()) : [],
+    promptBlocks: promptTemplate,
+    hasCompleted: candidate.interviewCalls.some((call) => call.status === 'completed'),
+  };
+}
+
+let blocksCache = { at: 0, value: null };
+
+/**
+ * The active interviewer block library (I10), cached for a minute: every call
+ * reads it, and a wording change is a new version made on purpose, not
+ * something that needs to land mid-call.
+ */
+export async function activePromptBlocks() {
+  if (blocksCache.value && Date.now() - blocksCache.at < 60_000) return blocksCache.value;
+  const row = await prisma.promptTemplate.findFirst({
+    where: { key: 'interviewer_system', active: true },
+    orderBy: { version: 'desc' },
+    select: { version: true, body: true },
+  });
+  const library = parseBlockLibrary(row?.body);
+  const value = library ? { version: row.version, ...library } : null;
+  blocksCache = { at: Date.now(), value };
+  return value;
+}
+
+/**
  * Find a candidate by E.164 phone number across tenants.
  * Prefers an approved-shortlist candidate; falls back to the most recent row if
  * no approved match exists (so the caller can still be told why they are not
@@ -63,7 +131,7 @@ export async function lookupCandidateByPhone(phoneE164) {
   if (!normalized) return null;
 
   const candidates = await prisma.candidate.findMany({
-    where: { phoneE164: normalized },
+    where: { phoneE164: normalized, ...ON_THE_LINE },
     include: {
       tenant: true,
       job: { include: { callWindows: true } },
@@ -84,33 +152,7 @@ export async function lookupCandidateByPhone(phoneE164) {
   const approved = candidates.find(isApprovedFromRecord);
   const candidate = approved ?? candidates[0];
 
-  const [latestApprovedJd, jobProtocol, tenantProtocol] = await Promise.all([
-    prisma.jobDescription.findFirst({
-      where: { jobId: candidate.jobId, approvedAt: { not: null } },
-      orderBy: { approvedAt: 'desc' },
-    }),
-    prisma.interviewProtocol.findUnique({
-      where: { tenantId_jobId: { tenantId: candidate.tenantId, jobId: candidate.jobId } },
-    }),
-    prisma.interviewProtocol.findFirst({
-      where: { tenantId: candidate.tenantId, jobId: null },
-      orderBy: { createdAt: 'desc' },
-    }),
-  ]);
-
-  const interviewProtocol = jobProtocol ?? tenantProtocol ?? null;
-  const hasCompleted = candidate.interviewCalls.some((call) => call.status === 'completed');
-
-  return {
-    candidate,
-    job: candidate.job,
-    tenant: candidate.tenant,
-    latestApprovedJd,
-    callWindows: candidate.job.callWindows ?? [],
-    interviewProtocol,
-    approved: isApprovedFromRecord(candidate),
-    hasCompleted,
-  };
+  return { ...(await callContext(candidate)), approved: isApprovedFromRecord(candidate) };
 }
 
 /**
@@ -133,7 +175,7 @@ async function resolveEmailToCandidateIds(emailLike) {
   if (!said) return [];
 
   if (said.includes('@')) {
-    const exact = await prisma.candidate.findMany({ where: { email: said }, select: { id: true } });
+    const exact = await prisma.candidate.findMany({ where: { email: said, ...ON_THE_LINE }, select: { id: true } });
     if (exact.length) return exact.map((c) => c.id);
   }
 
@@ -141,7 +183,7 @@ async function resolveEmailToCandidateIds(emailLike) {
   // approved ones. Restricting the pool to approved shortlist items meant an
   // ordinary applicant reading out their own address was told it did not exist.
   const pool = await prisma.candidate.findMany({
-    where: { email: { not: null } },
+    where: { email: { not: null }, ...ON_THE_LINE },
     select: { id: true, email: true },
   });
 
@@ -155,7 +197,7 @@ export async function lookupCandidateByEmail(emailLike) {
   if (!ids.length) return null;
 
   const candidates = await prisma.candidate.findMany({
-    where: { id: { in: ids } },
+    where: { id: { in: ids }, ...ON_THE_LINE },
     include: {
       tenant: true,
       job: { include: { callWindows: true } },
@@ -176,33 +218,7 @@ export async function lookupCandidateByEmail(emailLike) {
   const approved = candidates.find(isApprovedFromRecord);
   const candidate = approved ?? candidates[0];
 
-  const [latestApprovedJd, jobProtocol, tenantProtocol] = await Promise.all([
-    prisma.jobDescription.findFirst({
-      where: { jobId: candidate.jobId, approvedAt: { not: null } },
-      orderBy: { approvedAt: 'desc' },
-    }),
-    prisma.interviewProtocol.findUnique({
-      where: { tenantId_jobId: { tenantId: candidate.tenantId, jobId: candidate.jobId } },
-    }),
-    prisma.interviewProtocol.findFirst({
-      where: { tenantId: candidate.tenantId, jobId: null },
-      orderBy: { createdAt: 'desc' },
-    }),
-  ]);
-
-  const interviewProtocol = jobProtocol ?? tenantProtocol ?? null;
-  const hasCompleted = candidate.interviewCalls.some((call) => call.status === 'completed');
-
-  return {
-    candidate,
-    job: candidate.job,
-    tenant: candidate.tenant,
-    latestApprovedJd,
-    callWindows: candidate.job.callWindows ?? [],
-    interviewProtocol,
-    approved: isApprovedFromRecord(candidate),
-    hasCompleted,
-  };
+  return { ...(await callContext(candidate)), approved: isApprovedFromRecord(candidate) };
 }
 
 export async function isApprovedForInterview(candidateId) {
@@ -262,6 +278,8 @@ export async function updateInterviewCall(id, payload) {
       ...(payload.llmCostUsd !== undefined && { llmCostUsd: payload.llmCostUsd }),
       ...(payload.ttsCostUsd !== undefined && { ttsCostUsd: payload.ttsCostUsd }),
       ...(payload.sttCostUsd !== undefined && { sttCostUsd: payload.sttCostUsd }),
+      ...(payload.practicalDetails !== undefined && { practicalDetails: payload.practicalDetails }),
+      ...(payload.salaryMismatch !== undefined && { salaryMismatch: payload.salaryMismatch }),
     },
   });
 }
@@ -309,6 +327,10 @@ export async function createAssessmentReport(payload) {
   } catch {
     // Left to the next event to correct; the report itself is already saved.
   }
+
+  // The hiring team hears once the report exists. Not awaited: the email is
+  // news about the report, not part of it, and it never throws.
+  void notifyReportReady(report.interviewCallId);
 
   return report;
 }

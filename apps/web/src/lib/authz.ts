@@ -1,7 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
+import { noteSessionOrigin } from "@/lib/session-origin";
 import { adminPrisma, withTenant } from "@pratibha/prisma";
 import { Action, AppError, can, ForbiddenError, logAuthzDenial, TenantMismatchError, UnauthorizedError, UserRole } from "@pratibha/shared";
 import type { User, Tenant, Plan, TrialConfig, PrismaClient } from "@pratibha/prisma";
+import { settingText } from "@pratibha/shared/settings-runtime";
 import { currentTrial } from "@/lib/pricing";
 
 /**
@@ -22,9 +24,14 @@ export const PAUSED_STATUSES = ["suspended", "deleted_pending", "deleted"] as co
 /** Copy string, verbatim: the notice members see while their workspace is paused. */
 export const WORKSPACE_PAUSED_NOTICE = "This workspace is paused. Write to start@pratibha.tech to resolve it.";
 
+/** The same notice, naming the support address set in the admin panel (Brand, Contact). */
+export function workspacePausedNotice(): string {
+  return `This workspace is paused. Write to ${settingText("brand.support_email", "start@pratibha.tech")} to resolve it.`;
+}
+
 export class WorkspacePausedError extends AppError {
   constructor() {
-    super("WORKSPACE_PAUSED", WORKSPACE_PAUSED_NOTICE, 423);
+    super("WORKSPACE_PAUSED", workspacePausedNotice(), 423);
   }
 }
 
@@ -42,7 +49,20 @@ export async function requireAuth(): Promise<{ authUserId: string; email: string
   return { authUserId: authUser.id, email: authUser.email! };
 }
 
-export async function loadTenantContext(tenantSlug: string): Promise<RequestContext> {
+/** Refused until the first month is paid; the activation screen is the way in. */
+export class PaymentRequiredError extends AppError {
+  constructor() {
+    super("PAYMENT_REQUIRED", "Activate your workspace by paying for the first month.", 402);
+  }
+}
+
+/** What an unpaid workspace may still do: see and pay for its subscription. */
+const UNPAID_ACTIONS: readonly Action[] = [Action.billingRead, Action.billingManage];
+
+export async function loadTenantContext(
+  tenantSlug: string,
+  opts: { allowUnpaid?: boolean } = {}
+): Promise<RequestContext> {
   const { authUserId } = await requireAuth();
 
   // Session bootstrap: which tenant does this slug name, and does the signed-in
@@ -68,6 +88,13 @@ export async function loadTenantContext(tenantSlug: string): Promise<RequestCont
   if ((PAUSED_STATUSES as readonly string[]).includes(found.status)) {
     throw new WorkspacePausedError();
   }
+  if (found.status === "pending_payment" && !opts.allowUnpaid) {
+    throw new PaymentRequiredError();
+  }
+
+  // P01/P16: the first browser request of a new session records where it
+  // came from. Background work; never awaited.
+  noteSessionOrigin(user.id);
 
   const trial = found.status === "trial" ? await currentTrial() : null;
   return { user, tenant: { ...found, trial } };
@@ -88,7 +115,7 @@ export async function withTenantAuth<T>(
   action: Action,
   cb: (ctx: RequestContext, tx: TenantTransactionClient) => Promise<T>
 ): Promise<T> {
-  const ctx = await loadTenantContext(tenantSlug);
+  const ctx = await loadTenantContext(tenantSlug, { allowUnpaid: UNPAID_ACTIONS.includes(action) });
   const role = ctx.user.role as unknown as UserRole;
 
   // The role check happens BEFORE the work transaction opens. Logging a denial
@@ -140,7 +167,7 @@ export async function authorizeTenant(
   tenantSlug: string,
   action: Action
 ): Promise<{ ctx: RequestContext; tx: <T>(cb: (tx: TenantTransactionClient) => Promise<T>) => Promise<T> }> {
-  const ctx = await loadTenantContext(tenantSlug);
+  const ctx = await loadTenantContext(tenantSlug, { allowUnpaid: UNPAID_ACTIONS.includes(action) });
   const role = ctx.user.role as unknown as UserRole;
 
   if (!can(role, action)) {

@@ -1,5 +1,6 @@
 import { adminPrisma } from "@pratibha/prisma";
 import Markdown from "@/components/Markdown";
+import { copyText } from "@/lib/copy";
 import "@/app/jobs-module.css";
 
 interface PageProps {
@@ -49,7 +50,7 @@ export default async function CareersJobPage({ params }: PageProps) {
   if (!job) {
     return (
       <main style={{ maxWidth: 720, margin: "48px auto", padding: 24 }}>
-        <p>Job not found.</p>
+        <p>{copyText("copy.public.job.not_found")}</p>
       </main>
     );
   }
@@ -92,10 +93,10 @@ export default async function CareersJobPage({ params }: PageProps) {
       {jd ? (
         <Markdown source={jd.bodyMd} className="md-public" />
       ) : (
-        <p>No job description available.</p>
+        <p>{copyText("copy.public.job.no_description")}</p>
       )}
       <div style={{ marginTop: 32, padding: 16, background: "var(--surface-2)", borderRadius: 4, textAlign: "center" }}>
-        <p style={{ margin: 0 }}>Interested? Shortlisted candidates will be invited to a short telephonic interview with Pratibha, our AI recruiter.</p>
+        <p style={{ margin: 0 }}>{copyText("copy.public.job.interview_line", { company: job.tenant.name, job: job.title })}</p>
         {process.env.PRATIBHA_NUMBER ? (
           <a href={`tel:${process.env.PRATIBHA_NUMBER}`} style={{ fontSize: 24, fontWeight: "bold", color: "var(--accent)", textDecoration: "none", display: "block", marginTop: 12 }}>
             {process.env.PRATIBHA_NUMBER}

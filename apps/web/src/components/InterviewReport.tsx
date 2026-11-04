@@ -7,7 +7,9 @@ import Markdown, { markdownToPlain, truncateEnd } from "@/components/Markdown";
 import Time from "@/components/Time";
 import Transcript, { type TranscriptTurn } from "@/components/Transcript";
 import { callMinutes, plural } from "@/lib/format";
-import { CANDIDATE_STATUS_LABELS, type CandidateStatus } from "@pratibha/shared";
+import type { CandidateStatus } from "@pratibha/shared";
+import { useStatusLabel } from "@/lib/copy-client";
+import PracticalDetails, { hasPracticalDetails, type PracticalDetailsData } from "@/components/PracticalDetails";
 
 export interface QuestionAnswer {
   question: string;
@@ -37,7 +39,11 @@ export interface InterviewReportData {
   jdFitSummary: string | null;
   recommendationScore: number | null;
   recommendationVerdict: string | null;
-  dimensions?: { recommendationReasoning?: string; requirementFit?: RequirementFit[] } | null;
+  dimensions?: {
+    recommendationReasoning?: string;
+    requirementFit?: RequirementFit[];
+    practicalDetails?: PracticalDetailsData;
+  } | null;
   interviewCall?: {
     id: string;
     startedAt?: string | null;
@@ -97,6 +103,7 @@ export default function InterviewReport({
   /** After a stage change or a note, so the page can re-read what changed. */
   onChanged: () => void | Promise<void>;
 }) {
+  const statusLabel = useStatusLabel();
   const call = report.interviewCall;
   const candidate = call?.candidate;
   const who = reportCandidateName(report);
@@ -130,7 +137,7 @@ export default function InterviewReport({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || "Could not change the stage");
       setStatus(next);
-      setNotice(`${who} moved to ${CANDIDATE_STATUS_LABELS[next]}.`);
+      setNotice(`${who} moved to ${statusLabel(next)}.`);
       await onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not change the stage");
@@ -260,6 +267,11 @@ export default function InterviewReport({
         </div>
       </div>
 
+      {/* I20: what the screeners collected */}
+      {hasPracticalDetails(report.dimensions?.practicalDetails) && (
+        <PracticalDetails details={report.dimensions!.practicalDetails!} />
+      )}
+
       {/* Fit — per requirement when the report has it, the paragraph otherwise */}
       <section>
         <h3 className="report-sub">
@@ -357,7 +369,7 @@ export default function InterviewReport({
         <button type="button" className="btn-link" onClick={() => setNoting(true)} disabled={!candidate?.id}>
           Add a note
         </button>
-        {status && <span className="muted small">Stage: {CANDIDATE_STATUS_LABELS[status]}</span>}
+        {status && <span className="muted small">Stage: {statusLabel(status)}</span>}
         <div className="jm-spacer" />
         <span className="muted small">Pratibha recommends. You decide.</span>
       </footer>

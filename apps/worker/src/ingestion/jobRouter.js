@@ -1,3 +1,5 @@
+import { setting } from '@pratibha/shared/settings-runtime';
+
 /**
  * Work out which open job an application is for.
  *
@@ -22,7 +24,11 @@ const STOPWORDS = new Set([
   'senior', 'junior', 'lead', 'sr', 'jr', 'mid', 'level', 'i', 'ii', 'iii',
 ]);
 
-/** Score at which a match is trusted over the fallback bucket. */
+/**
+ * Score at which a match is trusted over the fallback bucket. This is the
+ * built-in default; the live value is `email.route_threshold`, read per
+ * message so a change in the admin panel applies to the next one.
+ */
 export const MATCH_THRESHOLD = 45;
 
 function tokenise(text) {
@@ -97,10 +103,12 @@ export function matchJobFromMessage(message, jobs = []) {
   const best = ranked[0];
   if (!best || best.score === 0) return none;
 
+  const threshold = setting('email.route_threshold');
+
   // Below the threshold the application still goes to the fallback bucket, but
   // the near miss is reported so "why did this not match?" is answerable from
   // the log instead of by re-running the router by hand.
-  if (best.score < MATCH_THRESHOLD) {
+  if (best.score < threshold) {
     return { ...none, runnerUp: best.job.title };
   }
 
@@ -117,6 +125,6 @@ export function matchJobFromMessage(message, jobs = []) {
     jobId: best.job.id,
     confidence: best.score,
     matchedTitle: best.job.title,
-    runnerUp: second && second.score >= MATCH_THRESHOLD ? second.job.title : null,
+    runnerUp: second && second.score >= threshold ? second.job.title : null,
   };
 }

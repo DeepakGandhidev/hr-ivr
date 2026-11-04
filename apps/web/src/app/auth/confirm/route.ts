@@ -3,13 +3,14 @@ import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
-const TYPES = ["magiclink", "recovery", "invite", "email", "signup"] as const;
+const TYPES = ["magiclink", "recovery", "invite", "email", "signup", "email_change"] as const;
 
 /**
  * Exchange a one-time token for a session, then go on.
  *
- * The standard landing for a GoTrue link: a password reset, an invite, or a
- * single-use sign in issued by the Pratibha team for support. The token is
+ * The standard landing for a GoTrue link: a sign-up confirmation, a password
+ * reset, a new email address, an invite, or a single-use sign in issued by the
+ * Pratibha team for support. The token is
  * GoTrue's and is verified by GoTrue; this route only sets the resulting
  * session cookie. `next` must be a path on this site, never another origin.
  */

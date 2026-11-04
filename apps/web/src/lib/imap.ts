@@ -16,7 +16,9 @@ export interface ImapTarget {
   port: number;
   secure: boolean;
   user: string;
-  pass: string;
+  /** A mailbox password, or for Gmail/Outlook sign-in an OAuth access token. */
+  pass?: string;
+  accessToken?: string;
   folder: string;
 }
 
@@ -73,12 +75,17 @@ export async function checkImap(target: ImapTarget): Promise<ImapCheck> {
     host: target.host,
     port: target.port,
     secure: target.secure,
-    auth: { user: target.user, pass: target.pass },
+    auth: target.accessToken
+      ? { user: target.user, accessToken: target.accessToken }
+      : { user: target.user, pass: target.pass ?? "" },
     connectionTimeout: 15_000,
     greetingTimeout: 15_000,
     socketTimeout: 20_000,
     logger: false,
   });
+  // A dead socket arrives as an 'error' event; unhandled, it would crash the
+  // web server. The awaited call below still rejects and is reported.
+  client.on("error", () => {});
 
   try {
     await client.connect();

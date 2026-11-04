@@ -1,77 +1,117 @@
 import type { AdminUser, Prisma } from "@pratibha/prisma";
+import { sealSecret } from "@pratibha/shared/crypto";
+import { refreshSettings } from "@pratibha/shared/settings-runtime";
+import { SETTINGS_BY_KEY, validateSettingValue, type SettingDef } from "@pratibha/shared/settings-registry";
 import { db } from "@/lib/db";
 import { recordActivity } from "@/lib/activity";
-import { badRequest } from "@/lib/http";
-import { getSettings, GATE_OPTIONS, type SettingKey } from "@/lib/settings";
+import { badRequest, forbidden } from "@/lib/http";
+import { can, refusalReason } from "@/lib/auth/roles";
+import { getSettings } from "@/lib/settings";
 
 /**
- * The keys the Platform settings page edits: the designed eight, and nothing
- * else. The portal reads the same rows, so a change applies on the next screen
- * load in every workspace, without a deploy. Every change is one log row per
- * key, with the old and the new value.
+ * Save Platform settings.
+ *
+ * The body is `{ set: { key: value }, reset: [key] }`. A reset deletes the
+ * saved row, so the key falls back to the server's .env or the default. The
+ * portal and the worker pick changes up within about 30 seconds. Every change
+ * is one Activity row with the old and new value; for secrets only the last
+ * four characters are ever recorded.
  */
-export const EDITABLE: { key: SettingKey; label: string; kind: "int" | "decimal" | "bool" | "gate"; min?: number; max?: number }[] = [
-  { key: "screening.suggest_threshold", label: "Suggest for shortlist at score", kind: "int", min: 1, max: 100 },
-  { key: "pipeline.junk_hint", label: "Junk hint on the Pipeline", kind: "bool" },
-  { key: "report.score_gap_threshold", label: "Score gap badge from", kind: "decimal", min: 0.5, max: 10 },
-  { key: "interview.screener_seconds", label: "Estimated seconds per screener", kind: "int", min: 5, max: 300 },
-  { key: "lists.page_size", label: "Rows per page", kind: "int", min: 10, max: 200 },
-  { key: "company.description_cap", label: "Description length cap", kind: "int", min: 100, max: 5000 },
-  { key: "gate.portal_posts", label: "Portal posts, Naukri and LinkedIn", kind: "gate" },
-  { key: "gate.interview_tuning", label: "Interview tuning: screeners, salary policy, custom questions", kind: "gate" },
-];
+export interface SaveSettingsInput {
+  set?: Record<string, unknown>;
+  reset?: string[];
+}
 
-export async function saveSettings(admin: AdminUser, input: Record<string, unknown>) {
+function needsOwner(def: SettingDef) {
+  return def.type === "secret" || Boolean(def.ownerOnly);
+}
+
+function fmt(def: SettingDef, v: unknown): string {
+  if (v === null || v === undefined) return "default";
+  if (def.type === "secret") {
+    const hint = v as { set?: boolean; last4?: string };
+    return hint.set ? `a key ending ${hint.last4}` : "not set";
+  }
+  if (typeof v === "boolean") return v ? "on" : "off";
+  if (Array.isArray(v)) return v.length ? v.join(", ") : "none";
+  const option = def.options?.find((o) => o.value === v);
+  if (option) return option.label;
+  const text = String(v);
+  return text.length > 80 ? `${text.slice(0, 77)}…` : text || "empty";
+}
+
+export async function saveSettings(admin: AdminUser, input: SaveSettingsInput) {
+  const set = input.set ?? {};
+  const reset = input.reset ?? [];
   const current = await getSettings();
-  const changes: { key: SettingKey; label: string; from: unknown; to: unknown }[] = [];
 
-  for (const def of EDITABLE) {
-    if (!(def.key in input)) continue;
-    const raw = input[def.key];
-    let value: unknown;
-    if (def.kind === "bool") {
-      if (typeof raw !== "boolean") throw badRequest(`${def.label}: choose on or off.`);
-      value = raw;
-    } else if (def.kind === "gate") {
-      if (!GATE_OPTIONS.some((g) => g.value === raw)) throw badRequest(`${def.label}: choose one of the options.`);
-      value = raw;
-    } else {
-      const n = Number(raw);
-      if (!Number.isFinite(n) || (def.kind === "int" && !Number.isInteger(n))) throw badRequest(`${def.label}: enter a ${def.kind === "int" ? "whole " : ""}number.`);
-      if ((def.min !== undefined && n < def.min) || (def.max !== undefined && n > def.max)) {
-        throw badRequest(`${def.label}: between ${def.min} and ${def.max}.`);
+  type Change = { def: SettingDef; from: unknown; to: unknown; stored: Prisma.InputJsonValue | null };
+  const changes: Change[] = [];
+
+  for (const [key, raw] of Object.entries(set)) {
+    const def = SETTINGS_BY_KEY[key];
+    if (!def) throw badRequest(`Unknown setting ${key}.`);
+    if (needsOwner(def) && !can(admin.role, "settings.owner")) throw forbidden(refusalReason(admin.role, "settings.owner"));
+
+    const checked = validateSettingValue(def, raw);
+    if (!checked.ok) throw badRequest(checked.error);
+
+    if (def.type === "secret") {
+      const plain = checked.value as string;
+      let sealed: string;
+      try {
+        sealed = sealSecret(plain);
+      } catch {
+        throw badRequest("This server cannot encrypt keys yet: EMAIL_SECRET_KEY is missing from the admin panel's environment.");
       }
-      value = def.kind === "decimal" ? Math.round(n * 10) / 10 : n;
+      const last4 = plain.slice(-4);
+      changes.push({ def, from: current[key], to: { set: true, last4 }, stored: { sealed, last4 } });
+    } else if (JSON.stringify(checked.value) !== JSON.stringify(current[key])) {
+      changes.push({ def, from: current[key], to: checked.value, stored: checked.value as Prisma.InputJsonValue });
     }
-    if (value !== current[def.key]) changes.push({ key: def.key, label: def.label, from: current[def.key], to: value });
+  }
+
+  for (const key of reset) {
+    const def = SETTINGS_BY_KEY[key];
+    if (!def) throw badRequest(`Unknown setting ${key}.`);
+    if (key in set) continue;
+    if (needsOwner(def) && !can(admin.role, "settings.owner")) throw forbidden(refusalReason(admin.role, "settings.owner"));
+    changes.push({ def, from: current[key], to: null, stored: null });
   }
 
   if (!changes.length) return { message: "Nothing changed." };
 
   await db.$transaction(async (tx) => {
     for (const c of changes) {
-      await tx.platformSetting.upsert({
-        where: { key: c.key },
-        update: { value: c.to as Prisma.InputJsonValue, updatedBy: admin.id },
-        create: { key: c.key, value: c.to as Prisma.InputJsonValue, updatedBy: admin.id },
-      });
+      if (c.stored === null) {
+        await tx.platformSetting.deleteMany({ where: { key: c.def.key } });
+      } else {
+        await tx.platformSetting.upsert({
+          where: { key: c.def.key },
+          update: { value: c.stored, updatedBy: admin.id },
+          create: { key: c.def.key, value: c.stored, updatedBy: admin.id },
+        });
+      }
       await recordActivity(
         {
           actor: admin,
           action: "settings.changed",
-          summary: `${admin.name} changed ${c.label}: ${fmt(c.from)} to ${fmt(c.to)}`,
-          before: { key: c.key, value: c.from },
-          after: { key: c.key, value: c.to },
+          summary:
+            c.to === null
+              ? `${admin.name} reset ${c.def.label} to the server default`
+              : `${admin.name} changed ${c.def.label}: ${fmt(c.def, c.from)} to ${fmt(c.def, c.to)}`,
+          // For a secret, from/to are only { set, last4 }: never the key itself.
+          before: { key: c.def.key, value: (c.from ?? null) as Prisma.InputJsonValue },
+          after: { key: c.def.key, value: (c.to === null ? "default" : c.to) as Prisma.InputJsonValue },
         },
         tx
       );
     }
   });
-  return { message: `Saved ${changes.length} ${changes.length === 1 ? "change" : "changes"}. They apply on every workspace's next screen load.` };
-}
 
-function fmt(v: unknown) {
-  if (typeof v === "boolean") return v ? "on" : "off";
-  const gate = GATE_OPTIONS.find((g) => g.value === v);
-  return gate ? gate.label : String(v);
+  // This app's own copy applies now rather than at the next 30-second refresh.
+  await refreshSettings().catch(() => {});
+
+  const n = changes.length;
+  return { message: `Saved ${n} ${n === 1 ? "change" : "changes"}. The portal and the call line pick them up within about 30 seconds.` };
 }

@@ -123,7 +123,16 @@ export const storage: StorageDriver = localStorageDriver;
 
 export const IMAGE_TYPES = ["image/png", "image/jpeg", "image/svg+xml", "image/webp"] as const;
 
-/** 2 MB. A logo that needs more than this is a logo nobody optimised. */
+/** "2 MB", for the limit as people read it. */
+export function formatMegabytes(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  return `${Number.isInteger(mb) ? mb : mb.toFixed(1)} MB`;
+}
+
+/**
+ * 2 MB. A logo that needs more than this is a logo nobody optimised. The live
+ * limit is the company.logo_max_bytes platform setting; this is its fallback.
+ */
 export const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
 export interface ImageCheck {
@@ -143,13 +152,13 @@ export interface ImageCheck {
  * sends it with a content type and disposition that stop the browser executing
  * it in our origin.
  */
-export function checkImageUpload(body: Buffer, declaredType: string): ImageCheck {
+export function checkImageUpload(body: Buffer, declaredType: string, maxBytes: number = MAX_IMAGE_BYTES): ImageCheck {
   if (!(IMAGE_TYPES as readonly string[]).includes(declaredType)) {
     return { ok: false, error: "Use a PNG, JPG, SVG or WebP image." };
   }
   if (body.byteLength === 0) return { ok: false, error: "That file is empty." };
-  if (body.byteLength > MAX_IMAGE_BYTES) {
-    return { ok: false, error: "Images must be 2 MB or smaller." };
+  if (body.byteLength > maxBytes) {
+    return { ok: false, error: `Images must be ${formatMegabytes(maxBytes)} or smaller.` };
   }
 
   const sniffed = sniffImageType(body);

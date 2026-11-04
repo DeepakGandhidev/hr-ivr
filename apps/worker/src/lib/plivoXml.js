@@ -1,3 +1,5 @@
+import { settingText } from '@pratibha/shared/settings-runtime';
+
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 /** "10 a.m." / "7 p.m." / "1.30 p.m." - spoken, not printed. */
@@ -93,31 +95,36 @@ export function streamXml(config, callUUID, from) {
 </Response>`;
 }
 
-/** 4.3 / 10 - outside hours the line answers and says when to call back. */
-export function closedXml(config) {
-  const message =
-    `Thanks for calling. Our first round calls are answered ` +
-    `${config.operatingHours.label}, India time. Please call back during those hours, ` +
-    `and we'll be glad to speak with you.`;
-
+/**
+ * Speak one line, then hang up. The wording and its language are platform
+ * settings, read per call; the built-in text stands in for an emptied field
+ * so the line never answers in silence.
+ */
+function speakThenHangUp(message) {
+  const language = settingText('scripts.speak_language', 'en-IN').trim();
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Speak language="en-IN">${escapeXml(message)}</Speak>
+  <Speak language="${escapeXml(language)}">${escapeXml(message)}</Speak>
   <Hangup/>
 </Response>`;
 }
 
+/** 4.3 / 10 - outside hours the line answers and says when to call back. */
+export function closedXml(config) {
+  const template = settingText(
+    'scripts.closed',
+    "Thanks for calling. Our first round calls are answered {hours}, India time. " +
+      "Please call back during those hours, and we'll be glad to speak with you."
+  );
+  return speakThenHangUp(template.replaceAll('{hours}', () => config.operatingHours.label));
+}
+
 /** 4.4 - every line busy. Say so rather than letting it ring out. */
 export function busyXml(_config) {
-  const message =
-    `Thanks for calling. All our lines are busy at the moment. ` +
-    `Please call back in a few minutes.`;
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Speak language="en-IN">${escapeXml(message)}</Speak>
-  <Hangup/>
-</Response>`;
+  return speakThenHangUp(settingText(
+    'scripts.busy',
+    'Thanks for calling. All our lines are busy at the moment. Please call back in a few minutes.'
+  ));
 }
 
 /**

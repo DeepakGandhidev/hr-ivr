@@ -19,12 +19,23 @@ type Fields = {
   visibility: "public" | "hidden";
 };
 
+/** What a plan row has saved for the catalogue: absent keys are the default. */
+type Includes = { features: Partial<Record<string, boolean>>; limits: Partial<Record<string, number | null>> };
+
+type Tiered<T> = Record<"starter" | "growth" | "scale", T>;
+export type Catalogue = {
+  features: { key: string; label: string; help: string; defaults: Tiered<boolean>; enforced: boolean; gate: string | null }[];
+  limits: { key: string; label: string; unit: string; help: string; defaults: Tiered<number | null>; enforced: boolean }[];
+};
+
 type PlanCard = {
   key: string;
   name: string;
   version: number;
   live: Fields;
   draft: Fields | null;
+  liveIncludes: Includes;
+  draftIncludes: Includes | null;
   changes: string[];
   workspaces: number;
   mrr: number;
@@ -43,6 +54,7 @@ export function PlansBoard(props: {
   publishRefusal: string;
   lastPublished: string | null;
   pending: number;
+  catalogue: Catalogue;
   plans: PlanCard[];
   packs: (Pack & { draft: (Pack & { retireOnPublish: boolean }) | null })[];
   newPacks: (Pack & { retireOnPublish: boolean })[];
@@ -101,7 +113,7 @@ export function PlansBoard(props: {
 
       <div className="grid-3">
         {props.plans.map((p) => (
-          <PlanEditor key={p.key} plan={p} canEdit={props.canEdit} onSaved={(m) => { toast.show(m); router.refresh(); }} />
+          <PlanEditor key={p.key} plan={p} catalogue={props.catalogue} canEdit={props.canEdit} onSaved={(m) => { toast.show(m); router.refresh(); }} />
         ))}
       </div>
 
@@ -135,8 +147,39 @@ export function PlansBoard(props: {
   );
 }
 
-function PlanEditor({ plan, canEdit, onSaved }: { plan: PlanCard; canEdit: boolean; onSaved: (m: string) => void }) {
+type IncludesForm = { features: Record<string, "default" | "on" | "off">; limits: Record<string, string> };
+
+function includesForm(c: Catalogue, inc: Includes): IncludesForm {
+  return {
+    features: Object.fromEntries(
+      c.features.map((f) => [f.key, inc.features[f.key] === undefined ? "default" : inc.features[f.key] ? "on" : "off"])
+    ),
+    limits: Object.fromEntries(
+      c.limits.map((l) => [l.key, !(l.key in inc.limits) ? "" : inc.limits[l.key] === null ? "Unlimited" : String(inc.limits[l.key])])
+    ),
+  };
+}
+
+function parseIncludes(form: IncludesForm): Includes {
+  const features: Includes["features"] = {};
+  for (const [k, v] of Object.entries(form.features)) if (v !== "default") features[k] = v === "on";
+  const limits: Includes["limits"] = {};
+  for (const [k, v] of Object.entries(form.limits)) {
+    const t = v.trim();
+    if (!t) continue;
+    limits[k] = /^unl/i.test(t) ? null : Number(t.replace(/[^\d]/g, ""));
+  }
+  return { features, limits };
+}
+
+const featureSame = (a: Includes, b: Includes, k: string) => a.features[k] === b.features[k];
+const limitSame = (a: Includes, b: Includes, k: string) => (k in a.limits) === (k in b.limits) && a.limits[k] === b.limits[k];
+
+function PlanEditor({ plan, catalogue, canEdit, onSaved }: { plan: PlanCard; catalogue: Catalogue; canEdit: boolean; onSaved: (m: string) => void }) {
   const start = plan.draft ?? plan.live;
+  const startIncludes = plan.draftIncludes ?? plan.liveIncludes;
+  const [inc, setInc] = useState<IncludesForm>(includesForm(catalogue, startIncludes));
+  const tier = (["starter", "growth", "scale"].includes(plan.key) ? plan.key : "starter") as keyof Tiered<boolean>;
   const [f, setF] = useState({
     priceInr: String(start.priceInr),
     slashedPriceInr: start.slashedPriceInr ? String(start.slashedPriceInr) : "",
@@ -157,14 +200,18 @@ function PlanEditor({ plan, canEdit, onSaved }: { plan: PlanCard; canEdit: boole
     visibility: f.visibility,
   };
   const base = plan.draft ?? plan.live;
-  const dirty = (Object.keys(parsed) as (keyof Fields)[]).some((k) => parsed[k] !== base[k]);
+  const includes = parseIncludes(inc);
+  const includesDirty =
+    catalogue.features.some((f) => !featureSame(includes, startIncludes, f.key)) ||
+    catalogue.limits.some((l) => !limitSame(includes, startIncludes, l.key));
+  const dirty = (Object.keys(parsed) as (keyof Fields)[]).some((k) => parsed[k] !== base[k]) || includesDirty;
   const differsFromLive = (k: keyof Fields) => parsed[k] !== plan.live[k];
 
   async function save() {
     setBusy(true);
     setError(null);
     try {
-      const res = await api<{ message: string }>(`/api/pricing/plans/${plan.key}`, parsed);
+      const res = await api<{ message: string }>(`/api/pricing/plans/${plan.key}`, { ...parsed, ...includes });
       onSaved(res.message);
     } catch (err) {
       setError((err as Error).message);
@@ -186,6 +233,7 @@ function PlanEditor({ plan, canEdit, onSaved }: { plan: PlanCard; canEdit: boole
         jobLimit: plan.live.jobLimit === null ? "Unlimited" : String(plan.live.jobLimit),
         visibility: plan.live.visibility,
       });
+      setInc(includesForm(catalogue, plan.liveIncludes));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -229,6 +277,65 @@ function PlanEditor({ plan, canEdit, onSaved }: { plan: PlanCard; canEdit: boole
           </select>
         </div>
       </div>
+      <details>
+        <summary className="label" style={{ cursor: "pointer", fontSize: 12.5, color: "var(--ink-strong)", fontWeight: 700 }}>
+          Features and limits ({catalogue.features.length + catalogue.limits.length}) · click to edit
+        </summary>
+        <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 8 }}>
+          {catalogue.features.map((ft) => {
+            // Short, so the feature name keeps the room: the gate's detail is in the tooltip.
+            const fallback = ft.gate ? `Default (${ft.gate.toLowerCase()})` : `Default: ${ft.defaults[tier] ? "on" : "off"}`;
+            return (
+              <div key={ft.key} className="card-row" style={{ gap: 8 }}>
+                <label className="grow" htmlFor={`${plan.key}-f-${ft.key}`} title={ft.help} style={{ fontSize: 13 }}>
+                  {ft.label}
+                  {!ft.enforced && <span className="chip sm" style={{ marginLeft: 6 }} title="Nothing in the portal checks this yet. It describes the plan only.">Display only</span>}
+                </label>
+                <select
+                  id={`${plan.key}-f-${ft.key}`}
+                  className={`select input sm${featureSame(includes, plan.liveIncludes, ft.key) ? "" : " draft"}`}
+                  style={{ width: "auto", maxWidth: 150 }}
+                  title={ft.gate ? `Uses the Platform settings plan gate (${ft.gate}) until set here` : undefined}
+                  value={inc.features[ft.key]}
+                  onChange={(e) => setInc({ ...inc, features: { ...inc.features, [ft.key]: e.target.value as "default" | "on" | "off" } })}
+                  disabled={!canEdit}
+                  aria-label={`${plan.name} ${ft.label}`}
+                >
+                  <option value="default">{fallback}</option>
+                  <option value="on">On</option>
+                  <option value="off">Off</option>
+                </select>
+              </div>
+            );
+          })}
+          {catalogue.limits.map((l) => {
+            const d = l.defaults[tier];
+            return (
+              <div key={l.key} className="card-row" style={{ gap: 8 }}>
+                <label className="grow" htmlFor={`${plan.key}-l-${l.key}`} title={l.help} style={{ fontSize: 13 }}>
+                  {l.label}
+                  {!l.enforced && <span className="chip sm" style={{ marginLeft: 6 }}>Display only</span>}
+                </label>
+                <input
+                  id={`${plan.key}-l-${l.key}`}
+                  className={`input sm${limitSame(includes, plan.liveIncludes, l.key) ? "" : " draft"}`}
+                  style={{ width: 130 }}
+                  value={inc.limits[l.key]}
+                  placeholder={`Default: ${d === null ? "unlimited" : d}`}
+                  onChange={(e) => setInc({ ...inc, limits: { ...inc.limits, [l.key]: e.target.value } })}
+                  disabled={!canEdit}
+                  aria-label={`${plan.name} ${l.label.toLowerCase()}`}
+                />
+              </div>
+            );
+          })}
+          <div className="hint">
+            A number, or Unlimited. Blank keeps the default. Open jobs, minutes and screenings are the fields above.
+            Display only entries describe the plan; nothing in the portal checks them yet. Like prices, a change applies to
+            workspaces that join or switch to this plan after publishing; existing workspaces keep the version they are on.
+          </div>
+        </div>
+      </details>
       {plan.draft ? (
         <div style={{ fontSize: 12.5, color: "var(--amber-ink)" }}>
           Draft change: {plan.changes.join(", ")}. Existing customers keep their price; the change applies to new signups.
@@ -417,6 +524,10 @@ function TrialCard({
         </div>
       </div>
       <div className="cell-muted">No card needed to start. Minutes apply to every workspace on trial once published; days to new signups.</div>
+      <div className="hint">
+        The trial has no feature switches of its own: a trial workspace is on Starter, so it gets Starter&apos;s features and
+        limits, with the trial&apos;s own minutes, screenings and open jobs.
+      </div>
       {error && <div className="error-text">{error}</div>}
       {canEdit && (dirty || draft) && (
         <div className="card-row">

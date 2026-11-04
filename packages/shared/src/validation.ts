@@ -1,4 +1,31 @@
 import { z } from 'zod';
+import { savedSetting } from './constants.js';
+import { GUARDRAIL_ERROR, maxCustomQuestions, touchesPersonalTopic } from './interviewPlan.js';
+
+/** Must-haves and good-to-haves a job may list, before the admin panel moves them. */
+export const MAX_MUST_HAVES = 20;
+export const MAX_GOOD_TO_HAVES = 20;
+
+/**
+ * An array capped at a limit read when it is parsed, not when the schema is
+ * built: the schemas below are module-level, and the limits are admin-panel
+ * settings. Reports the same issue `.max(n)` would, so error output is unchanged.
+ */
+const atMost = <T extends z.ZodTypeAny>(item: T, limit: () => number, message?: (n: number) => string) =>
+  z.array(item).superRefine((arr, ctx) => {
+    const max = limit();
+    if (arr.length <= max) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.too_big,
+      maximum: max,
+      type: 'array',
+      inclusive: true,
+      exact: false,
+      ...(message ? { message: message(max) } : {}),
+    });
+  });
+
+const COUNT_WORDS = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
 
 export const createTenantSchema = z.object({
   name: z.string().min(1).max(120),
@@ -10,11 +37,15 @@ export const createTenantSchema = z.object({
 
 export const createJobSchema = z.object({
   title: z.string().min(1).max(200),
-  location: z.string().max(200).optional(),
-  salaryBand: z.string().max(200).optional(),
-  experienceRange: z.string().max(200).optional(),
-  mustHaves: z.array(z.string()).max(20).default([]),
-  goodToHaves: z.array(z.string()).max(20).default([]),
+  // Nullable: the role form clears an optional field by sending null.
+  location: z.string().max(200).nullable().optional(),
+  salaryBand: z.string().max(200).nullable().optional(),
+  /** I02: annual rupees. */
+  salaryMin: z.coerce.number().int().positive().max(1_000_000_000).nullable().optional(),
+  salaryMax: z.coerce.number().int().positive().max(1_000_000_000).nullable().optional(),
+  experienceRange: z.string().max(200).nullable().optional(),
+  mustHaves: atMost(z.string(), () => savedSetting('limits.must_haves_max', MAX_MUST_HAVES)).default([]),
+  goodToHaves: atMost(z.string(), () => savedSetting('limits.good_to_haves_max', MAX_GOOD_TO_HAVES)).default([]),
 });
 
 export const jobDescriptionSchema = z.object({
@@ -42,9 +73,14 @@ export const outreachTemplateSchema = z.object({
   bodyMd: z.string().min(1),
 });
 
+/** I14: refused at save, whichever client sent it. */
+const guarded = (max: number) =>
+  z.string().max(max).refine((v) => !touchesPersonalTopic(v), { message: GUARDRAIL_ERROR });
+
 export const interviewProtocolSchema = z.object({
   jobId: z.string().optional(),
-  instructionText: z.string().min(1).max(20000),
+  /** "Anything else, in your words": optional since Batch 6 demoted it. */
+  instructionText: guarded(20000).default(''),
   /** Bounds mirror the database CHECK constraints, so the UI cannot offer a
    *  value the write will reject. */
   durationMinutes: z.coerce.number().int().min(2).max(90).optional(),
@@ -54,6 +90,27 @@ export const interviewProtocolSchema = z.object({
   focusAreas: z.array(z.string().min(1).max(60)).max(12).optional(),
   agentName: z.string().min(1).max(60).nullable().optional(),
   companyName: z.string().min(1).max(120).nullable().optional(),
+  // Batch 6, I01.
+  screenNotice: z.boolean().optional(),
+  screenSalary: z.boolean().optional(),
+  screenReasonLeaving: z.boolean().optional(),
+  screenGaps: z.boolean().optional(),
+  screenLocation: z.boolean().optional(),
+  screenWorkMode: z.boolean().optional(),
+  screenTravel: z.boolean().optional(),
+  screenReference: z.boolean().optional(),
+  shareBand: z.boolean().optional(),
+  mismatchAction: z.enum(['note', 'check', 'end']).optional(),
+  introduceRole: z.boolean().optional(),
+  candidateQuestions: z.boolean().optional(),
+  hearBackDays: z.coerce.number().int().min(1).max(30).nullable().optional(),
+  // I13: three at most (interview.max_custom_questions), enforced here rather
+  // than trusted from the form.
+  customQuestions: atMost(guarded(300), maxCustomQuestions, (n) =>
+    n === 0 ? 'Custom questions are turned off.' : `${COUNT_WORDS[n] ?? n} question${n === 1 ? '' : 's'} at most.`
+  )
+    .transform((qs) => qs.map((q) => q.trim()).filter(Boolean))
+    .optional(),
 }).superRefine((value, ctx) => {
   if (
     value.minQuestions !== undefined &&
@@ -105,6 +162,15 @@ export const emailConnectionSchema = z
     ...imapFields,
   })
   .superRefine((value, ctx) => {
+    // A forwarding address with nowhere to file mail would accept applications
+    // and drop them.
+    if (value.provider === 'forward_alias' && !value.defaultJobId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['defaultJobId'],
+        message: 'defaultJobId is required for a forwarding address',
+      });
+    }
     if (value.provider !== 'imap') return;
     for (const field of ['imapHost', 'imapPassword'] as const) {
       if (!value[field]) {

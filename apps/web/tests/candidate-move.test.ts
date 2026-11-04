@@ -32,8 +32,9 @@ describe("candidate move endpoint", () => {
     expect(routeSource).toMatch(/shortlist:\s*\{\s*jobId:\s*candidate\.jobId\s*\}/);
   });
 
-  it("clears screenings scored against the old job's must-haves", () => {
-    expect(routeSource).toMatch(/screening\.deleteMany/);
+  it("keeps old screenings in the candidate's history (Batch 7, PL60)", () => {
+    expect(routeSource).not.toMatch(/screening\.deleteMany/);
+    expect(routeSource).toMatch(/status:\s*"inbox"/);
   });
 
   it("checks the phone-number uniqueness constraint before writing", () => {
@@ -43,9 +44,9 @@ describe("candidate move endpoint", () => {
     expect(routeSource).toMatch(/already on \$\{job\.title\}|already on /);
   });
 
-  it("records the move, including what was discarded", () => {
+  it("records the move, and whether the new screening is queued or awaiting", () => {
     expect(routeSource).toContain("candidate.moved");
-    expect(routeSource).toContain("discardedScreenings");
+    expect(routeSource).toMatch(/screeningMode === "auto" \? "queued" : "awaiting"/);
   });
 
   it("re-marks routing as manual rather than leaving a stale router verdict", () => {

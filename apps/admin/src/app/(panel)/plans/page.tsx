@@ -1,6 +1,8 @@
 import { requireAdminPage } from "@/lib/auth/session";
 import { can, refusalReason } from "@/lib/auth/roles";
-import { pricingBoard } from "@/lib/pricing-admin";
+import { entitlementsOf, pricingBoard } from "@/lib/pricing-admin";
+import { GATE_OPTIONS, getSetting } from "@/lib/settings";
+import { PLAN_FEATURES, PLAN_LIMITS } from "@pratibha/shared";
 import { longDate } from "@/lib/format";
 import { PlansBoard } from "./PlansBoard";
 
@@ -8,7 +10,36 @@ export const dynamic = "force-dynamic";
 
 export default async function PlansPage() {
   const { admin } = await requireAdminPage();
-  const board = await pricingBoard();
+  const [board, portalGate, tuningGate] = await Promise.all([
+    pricingBoard(),
+    getSetting("gate.portal_posts"),
+    getSetting("gate.interview_tuning"),
+  ]);
+  const gateLabel = (v: unknown) => GATE_OPTIONS.find((o) => o.value === v)?.label ?? "Every plan";
+  const gates: Record<string, string> = {
+    "gate.portal_posts": gateLabel(portalGate),
+    "gate.interview_tuning": gateLabel(tuningGate),
+  };
+  // The catalogue as plain data, so the client bundle does not pull in the
+  // shared package (and zod with it).
+  const catalogue = {
+    features: PLAN_FEATURES.map((f) => ({
+      key: f.key,
+      label: f.label,
+      help: f.help,
+      defaults: { ...f.defaults },
+      enforced: f.enforced,
+      gate: "legacyGate" in f ? gates[f.legacyGate] : null,
+    })),
+    limits: PLAN_LIMITS.filter((l) => !("column" in l)).map((l) => ({
+      key: l.key,
+      label: l.label,
+      unit: l.unit,
+      help: l.help,
+      defaults: { ...l.defaults },
+      enforced: l.enforced,
+    })),
+  };
 
   return (
     <PlansBoard
@@ -18,12 +49,15 @@ export default async function PlansPage() {
       publishRefusal={refusalReason(admin.role, "pricing.publish")}
       lastPublished={board.lastPublishedAt ? `${longDate(board.lastPublishedAt)}${board.lastPublisher ? ` by ${board.lastPublisher}` : ""}` : null}
       pending={board.pendingCount}
+      catalogue={catalogue}
       plans={board.plans.map((p) => ({
         key: p.live.key,
         name: p.live.name,
         version: p.live.version,
         live: fields(p.live),
         draft: p.draft ? fields(p.draft) : null,
+        liveIncludes: entitlementsOf(p.live),
+        draftIncludes: p.draft ? entitlementsOf(p.draft) : null,
         changes: p.changes,
         workspaces: p.workspaces,
         mrr: p.mrr,

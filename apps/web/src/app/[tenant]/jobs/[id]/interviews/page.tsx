@@ -12,6 +12,7 @@ import { JobShellError, JobTabHeader, JobTabs, recommendationChip, useJobSummary
 import { firstSentence } from "@/components/Markdown";
 import Time from "@/components/Time";
 import { callMinutes } from "@/lib/format";
+import { useCopy } from "@/lib/copy-client";
 
 /**
  * A job's interviews: a table first, one report at a time underneath.
@@ -21,6 +22,7 @@ import { callMinutes } from "@/lib/format";
  * what does Pratibha think" at a glance; a report opens only when asked for.
  */
 export default function InterviewsPage({ params }: { params: { tenant: string; id: string } }) {
+  const t = useCopy();
   const { tenant, id } = params;
   const searchParams = useSearchParams();
   const { summary, error: summaryError, refresh } = useJobSummary();
@@ -58,12 +60,8 @@ export default function InterviewsPage({ params }: { params: { tenant: string; i
   return (
     <div className="jm">
       <JobTabHeader
-        title="Interviews"
-        intro={
-          n === 0
-            ? "No interviews completed yet. Reports are ready within minutes of each call."
-            : `${n} completed. Reports are ready within minutes of each call. Pratibha recommends, you decide.`
-        }
+        title={t("copy.portal.job.tab_interviews")}
+        intro={n === 0 ? t("copy.portal.job.interviews.intro_none") : t("copy.portal.job.interviews.intro", { count: n })}
       />
       <JobTabs active="interviews" />
 

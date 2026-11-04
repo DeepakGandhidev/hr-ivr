@@ -1,8 +1,17 @@
-import { Resend } from "resend";
+import { adminPrisma } from "@pratibha/prisma";
+import { deliverEmail, logEmail, type MailerDb } from "@pratibha/shared/mailer";
+import { displayNameOf } from "@pratibha/shared/platform-mail";
+import { setting, settingText } from "@pratibha/shared/settings-runtime";
 import { sendViaMailbox } from "@/lib/smtp";
 import type { EmailConnection } from "@pratibha/prisma";
 
 export interface SendEmailPayload {
+  /** Which email this is (see EMAIL_KINDS): its on/off switch and its row in the log. */
+  kind: string;
+  /** The workspace it is about, for the log. */
+  tenantId?: string | null;
+  /** Send at most once per key. */
+  dedupeKey?: string;
   to: string;
   subject: string;
   body: string;
@@ -45,27 +54,14 @@ export function renderBrandedEmail(body: string, logoUrl: string, companyName: s
 }
 
 /**
- * §5 Stage 2: outreach goes out as {tenant-slug}@mail.pratibha.tech with
- * reply-to pointing at the tenant's own hiring inbox, unless the tenant granted
- * a send scope on their own mailbox. The domain is configurable because it has
- * to be a domain verified with the mail provider — an unverified one is
- * rejected outright.
+ * The sender a candidate sees: "<Company> via Pratibha". The address is always
+ * Pratibha's own mailbox (the mailer sets it); only the name is chosen here.
+ * A plan without "Emails sent in the company's name" sends as the product.
  */
-export function outreachFromAddress(tenantSlug: string, tenantName: string): string {
-  // An explicit sender wins over the per-tenant address. Resend refuses any
-  // From on a domain that is not verified in the account (403
-  // validation_error), which makes every outbound email fail until DNS is set
-  // up — and there is no way to tell that apart from a code fault from the UI.
-  // This override lets a deployment send from a working sender (Resend's
-  // onboarding@resend.dev, or any verified domain) while its own domain is
-  // still pending, instead of having no outbound mail at all.
-  const override = process.env.RESEND_FROM_EMAIL;
-  if (override) {
-    return override.includes("<") ? override : `${tenantName} via Pratibha <${override}>`;
-  }
-
-  const domain = process.env.RESEND_FROM_DOMAIN ?? "mail.pratibha.tech";
-  return `${tenantName} via Pratibha <${tenantSlug}@${domain}>`;
+export function outreachFromAddress(_tenantSlug: string, tenantName: string, inCompanyName = true): string {
+  const via = settingText("messages.sender_name", "Pratibha");
+  const name = inCompanyName ? `${tenantName} via ${via}` : via;
+  return `${name} <mailbox>`;
 }
 
 /**
@@ -89,96 +85,84 @@ export interface SendEmailResult {
   ok: boolean;
   providerMessageId?: string;
   error?: string;
-  /** True when no API key is configured and the email was only logged. */
-  logOnly?: boolean;
+  /** The mail server's reply. */
+  smtpResponse?: string;
+  /** Not sent because the email is switched off in the admin panel. */
+  skipped?: boolean;
 }
 
+const mailerDb = adminPrisma as unknown as MailerDb;
+
+/**
+ * Send from Pratibha's mailbox (connected on the admin panel's Email page).
+ * There is no other provider: with no mailbox connected the email is not sent
+ * and the result says so.
+ */
 export async function sendEmail(payload: SendEmailPayload): Promise<SendEmailResult> {
-  const apiKey = process.env.RESEND_API_KEY;
-  const fromAddress = payload.from ?? process.env.RESEND_FROM_EMAIL ?? "Pratibha <noreply@mail.pratibha.tech>";
-
-  if (!apiKey) {
-    console.log("[email log-only] Would send email:", JSON.stringify({ ...payload, from: fromAddress }));
-    return { ok: true, logOnly: true };
-  }
-
-  try {
-    const resend = new Resend(apiKey);
-    const { data, error } = await resend.emails.send({
-      from: fromAddress,
-      to: payload.to,
-      subject: payload.subject,
-      text: payload.body,
-      // Both parts when there is a logo: the client picks, and a text-only
-      // reader still gets the whole message.
-      ...(payload.logoUrl
-        ? { html: renderBrandedEmail(payload.body, payload.logoUrl, payload.from ?? "") }
-        : {}),
-      ...(payload.replyTo ? { replyTo: payload.replyTo } : {}),
-    });
-
-    if (error) {
-      // Resend reports an unverified sending domain as a 403 whose message names
-      // the domain and what to do about it. That message is the difference
-      // between a recruiter retrying forever and someone adding a DNS record, so
-      // it is passed through rather than flattened to "failed".
-      console.error("[email] Resend rejected the send:", error.message, { from: fromAddress });
-      return { ok: false, error: error.message };
-    }
-
-    return { ok: true, providerMessageId: data?.id };
-  } catch (err) {
-    // A throw here is a network or SDK fault, not a rejected email. Without this
-    // the whole send-invites request 500s and the candidates already mailed in
-    // this run are reported as neither sent nor failed.
-    const message = err instanceof Error ? err.message : "Email provider unreachable";
-    console.error("[email] Send threw:", message, { from: fromAddress });
-    return { ok: false, error: message };
-  }
+  const fromName = displayNameOf(payload.from);
+  const result = await deliverEmail(mailerDb, {
+    kind: payload.kind,
+    tenantId: payload.tenantId,
+    dedupeKey: payload.dedupeKey,
+    to: payload.to,
+    subject: payload.subject,
+    text: payload.body,
+    ...(payload.logoUrl ? { html: renderBrandedEmail(payload.body, payload.logoUrl, fromName ?? "") } : {}),
+    ...(payload.replyTo ? { replyTo: payload.replyTo } : {}),
+    fromName,
+  });
+  return {
+    ok: result.ok,
+    providerMessageId: result.messageId,
+    error: result.error,
+    smtpResponse: result.response,
+    skipped: result.status === "skipped",
+  };
 }
 
 /**
- * Send as the tenant, preferring their own mailbox over the shared provider.
+ * Send as the tenant, preferring their own mailbox over Pratibha's.
  *
- * Order matters and is not arbitrary:
- *   1. the mailbox they connected — proven credentials, their real address, and
+ *   1. the mailbox they connected with a password — their real address, and
  *      replies land in the inbox they already read;
- *   2. Resend — for tenants on OAuth or a forward alias, where we hold no
- *      password to send with;
- *   3. log-only, when neither is configured.
+ *   2. Pratibha's mailbox, as "<Company> via Pratibha" — for tenants on OAuth
+ *      or a forward alias, where we hold no password to send with, and as the
+ *      fallback when their own mailbox fails.
  *
- * Falling back on a mailbox failure is deliberate but narrow: if their SMTP is
- * down, a message from the shared sender still beats no message. The result
- * says which route was taken so the UI can tell the recruiter where their mail
- * actually went out from.
+ * The result says which route was taken so the UI can tell the recruiter
+ * where their mail actually went out from.
  */
 export async function sendAsTenant(
   connection: EmailConnection | null,
-  tenant: { slug: string; name: string },
+  tenant: { id?: string; slug: string; name: string },
   payload: SendEmailPayload
 ): Promise<
   SendEmailResult & {
-    via: "mailbox" | "resend" | "log";
-    /** The SMTP server's reply, when the tenant's own mailbox was used. */
-    smtpResponse?: string;
+    via: "mailbox" | "platform";
     /** Whether a copy was filed in their Sent folder. */
     savedToSent?: boolean;
   }
 > {
-  // EMAIL_TRANSPORT forces a route when the default order is wrong for a
-  // deployment. It exists because a mailbox can accept mail and then silently
-  // fail to deliver it: a shared host that answers "250 OK" to every recipient,
-  // including domains that cannot exist, has told us nothing, and there is no
-  // signal in-band to detect that. Setting "resend" skips the mailbox entirely.
-  const forced = process.env.EMAIL_TRANSPORT;
+  // messages.transport: "platform" skips the workspace mailbox entirely, for
+  // a mailbox that accepts mail and then silently fails to deliver it.
+  const forced = setting<string>("messages.transport");
   const mailboxUsable = Boolean(connection && connection.provider === "imap" && connection.imapSecret);
 
-  if (forced !== "resend" && mailboxUsable) {
+  if (forced !== "platform" && mailboxUsable) {
     const result = await sendViaMailbox(connection!, {
       to: payload.to,
       subject: payload.subject,
       body: payload.body,
       fromName: tenant.name,
+    });
+    await logEmail(mailerDb, {
+      kind: payload.kind,
+      tenantId: payload.tenantId ?? tenant.id ?? null,
+      to: payload.to,
+      subject: payload.subject,
+      ok: result.ok,
+      error: result.ok ? undefined : `Workspace mailbox: ${result.error}`,
+      response: result.response,
     });
 
     if (result.ok) {
@@ -195,13 +179,12 @@ export async function sendAsTenant(
     const fallback = await sendEmail(payload);
     return {
       ...fallback,
-      via: fallback.logOnly ? "log" : "resend",
+      via: "platform",
       // Keep the mailbox reason when the fallback also fails, because that is
       // the one the recruiter can actually fix.
-      ...(fallback.ok ? {} : { error: `mailbox: ${result.error}; provider: ${fallback.error}` }),
+      ...(fallback.ok ? {} : { error: `mailbox: ${result.error}; Pratibha: ${fallback.error}` }),
     };
   }
 
-  const result = await sendEmail(payload);
-  return { ...result, via: result.logOnly ? "log" : "resend" };
+  return { ...(await sendEmail(payload)), via: "platform" };
 }

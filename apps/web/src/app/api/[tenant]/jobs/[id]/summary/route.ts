@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { Action, can, NotFoundError, UserRole } from "@pratibha/shared";
 import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
+import { planAllows } from "@/lib/plan-features";
 import {
   attentionFor,
   countsForJobs,
@@ -75,7 +76,7 @@ export async function GET(
         config: {
           scoreThreshold: scoreThresholdOf(job, settings.suggestThreshold),
           scoreGapThreshold: config.scoreGapThreshold,
-          portalPosts: config.portalPosts,
+          portalPosts: planAllows(ctx.tenant, "portal_posts"),
         },
         permissions: {
           canEdit: can(role, Action.jobUpdate),

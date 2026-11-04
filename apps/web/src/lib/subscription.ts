@@ -1,4 +1,5 @@
 import { approximateInterviews, quotaState } from "@pratibha/shared";
+import { setting } from "@pratibha/shared/settings-runtime";
 import type { TenantTransactionClient, TenantWithPlan } from "@/lib/authz";
 import { currentUsagePeriod, interviewMinuteLimit } from "@/lib/billing";
 import { livePacks, trialAllowance } from "@/lib/pricing";
@@ -172,6 +173,10 @@ export async function topUpPacks(tx: TenantTransactionClient) {
  * A closed list plus free text, because the point of capturing this is to count
  * it later — free text alone produces a pile nobody reads, and a list alone
  * loses the one answer that would have been worth hearing.
+ *
+ * Stored and validated by `key`, so this stays in code: the admin panel's
+ * billing.cancel_reasons is a list of labels with no keys, and offering it here
+ * would store values nothing counts and refuse the keys already on file.
  */
 export const CANCEL_REASONS = [
   { key: "too_expensive", label: "Too expensive" },
@@ -182,11 +187,21 @@ export const CANCEL_REASONS = [
   { key: "other", label: "Something else" },
 ] as const;
 
-/** What happens to their data. One place, so every surface agrees. */
+/**
+ * What happens to their data. One place, so every surface agrees.
+ *
+ * 30 days is the default; the admin panel's billing.data_retention_days moves
+ * it. A getter rather than a copy, so every response that serialises this
+ * states the figure in force at that moment.
+ */
 export const DATA_CONSEQUENCES = {
   readOnlyAfterExpiry: true,
   deletedAfterDays: 30,
 };
+Object.defineProperty(DATA_CONSEQUENCES, "deletedAfterDays", {
+  enumerable: true,
+  get: () => setting<number>("billing.data_retention_days"),
+});
 
 /**
  * Which billing emails the finance contact receives.

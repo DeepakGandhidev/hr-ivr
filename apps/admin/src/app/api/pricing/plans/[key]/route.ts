@@ -13,12 +13,19 @@ const schema = z.object({
   screenings: z.number().int(),
   jobLimit: z.number().int().nullable(),
   visibility: z.enum(["public", "hidden"]),
+  // What the plan includes (the catalogue in @pratibha/shared planFeatures).
+  // Only keys the admin has set; an absent key is the default. Checked against
+  // the catalogue in savePlanDraft. Left out entirely, what is live is kept.
+  features: z.record(z.boolean()).optional(),
+  limits: z.record(z.number().int().nullable()).optional(),
 });
 
 /** Save a plan edit as a draft. Nothing anyone sees changes until publish. */
 export async function POST(request: NextRequest, { params }: { params: { key: string } }) {
   return handle(request, async () => {
     const { admin } = await requireAdmin("pricing.edit");
-    return savePlanDraft(admin, params.key, await parseBody(request, schema));
+    const { features, limits, ...fields } = await parseBody(request, schema);
+    const entitlements = features || limits ? { features: features ?? {}, limits: limits ?? {} } : undefined;
+    return savePlanDraft(admin, params.key, fields, entitlements);
   });
 }

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { isBillableInterview, deriveCallStatus } from '../src/lib/callSession.js';
+import { deriveCallStatus } from '../src/lib/callSession.js';
+import { isBillableCall } from '@pratibha/shared';
+
+// Billing moved to per-minute metering: the rule now lives in the shared
+// package as isBillableCall, and a call also needs billable minutes.
+const isBillableInterview = (call) => isBillableCall({ minutes: 5, ...call });
 import { TERMINAL } from '../src/lib/states.js';
 
 const base = { status: 'completed', recognised: true, producesReport: true, tenantId: 't1' };
@@ -36,6 +41,10 @@ describe('isBillableInterview — §2.8', () => {
 
   it('does not bill a completed call that somehow produced no report', () => {
     expect(isBillableInterview({ ...base, producesReport: false })).toBe(false);
+  });
+
+  it('does not bill a call with no billable minutes', () => {
+    expect(isBillableInterview({ ...base, minutes: 0 })).toBe(false);
   });
 
   it('does not bill without a tenant', () => {

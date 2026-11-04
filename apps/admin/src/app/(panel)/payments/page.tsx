@@ -8,6 +8,7 @@ import { livePacks, packLabel } from "@/lib/pricing";
 import { METHOD_LABEL } from "@/lib/ledger";
 import { inrPaise, num, shortDate } from "@/lib/format";
 import { PaymentMenu, RecordPaymentButton } from "./PaymentActions";
+import { autopaySummary, gatewayInfo } from "@/lib/autopay-admin";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +35,8 @@ export default async function PaymentsPage({
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.min(pages, Math.max(1, Number(searchParams.page) || 1));
 
-  const [rows, workspaces, packs, scoped] = await Promise.all([
+  const gateway = gatewayInfo();
+  const [rows, workspaces, packs, scoped, autopay] = await Promise.all([
     db.payment.findMany({
       where: paymentWhere({ q, filter, workspace }),
       orderBy: { paidAt: "desc" },
@@ -49,6 +51,7 @@ export default async function PaymentsPage({
     }),
     livePacks(),
     workspace ? db.tenant.findUnique({ where: { id: workspace }, select: { name: true } }) : null,
+    autopaySummary(),
   ]);
 
   const href = (over: Record<string, string | number | undefined>) => {
@@ -80,6 +83,46 @@ export default async function PaymentsPage({
             packs={packs.map((p) => ({ id: p.id, label: packLabel(p), priceInr: p.priceInr }))}
           />
         )}
+      </div>
+
+      <div className="card card-pad" style={{ gap: 10, marginBottom: 16 }}>
+        <div className="card-row">
+          <div className="grow card-title">Cashfree AutoPay</div>
+          {gateway.provider === "cashfree" ? (
+            <span className={`chip ${gateway.mode === "production" ? "chip-green" : "chip-amber"}`}>
+              {gateway.mode === "production" ? "Live" : "Sandbox"}
+            </span>
+          ) : (
+            <span className="chip chip-neutral">Not connected · manual billing</span>
+          )}
+        </div>
+        <div className="grid-4">
+          <div className="kpi"><div className="kpi-value sm">{num(autopay.mandates.active)}</div><div className="kpi-label">Mandates active</div></div>
+          <div className="kpi"><div className="kpi-value sm">{num(autopay.mandates.pending)}</div><div className="kpi-label">Awaiting customer approval</div></div>
+          <div className="kpi"><div className="kpi-value sm">{num(autopay.inFlight.length)}</div><div className="kpi-label">Renewals being charged</div></div>
+          <div className="kpi"><div className={`kpi-value sm${autopay.retrying ? " warn" : ""}`}>{num(autopay.retrying)}</div><div className="kpi-label">Failed AutoPay charges</div></div>
+        </div>
+        {autopay.inFlight.length > 0 && (
+          <div style={{ display: "grid", gap: 6 }}>
+            {autopay.inFlight.map((r) => (
+              <div key={r.tenant.id} className="card-row" style={{ fontSize: 13 }}>
+                <Link href={`/workspaces/${r.tenant.id}`} className="grow cell-strong" style={{ textDecoration: "none" }}>{r.tenant.name}</Link>
+                <span className="cell-muted">due {shortDate(r.dueOn)}</span>
+                {r.invoice && <Link href={`/payments/invoices/${r.invoice.id}`} style={{ fontWeight: 600 }}>{r.invoice.number}</Link>}
+                {r.invoice && <span style={{ fontWeight: 600 }}>{inrPaise(r.invoice.totalPaise)}</span>}
+                <span className={`chip ${r.payment?.status === "failed" ? "chip-red" : "chip-amber"}`}>
+                  {r.payment?.status === "failed"
+                    ? r.payment.retryAt ? `Failed · retry ${shortDate(r.payment.retryAt)}` : "Failed · chase manually"
+                    : r.payment?.status === "scheduled_retry" ? "Retrying" : "Debit scheduled"}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="card-foot">
+          Customers set up AutoPay from Subscription in the portal. Renewals are charged three days before the period ends and
+          land here as captured or failed by themselves; a failed one retries daily for a week.
+        </div>
       </div>
 
       <form className="toolbar" action="/payments">
@@ -116,7 +159,9 @@ export default async function PaymentsPage({
               ? { tone: "green", label: p.kind === "refund" ? "Refund paid" : "Captured" }
               : p.status === "refunded"
                 ? { tone: "neutral", label: "Refunded" }
-                : { tone: "red", label: p.retryAt ? `Failed · retry ${shortDate(p.retryAt)}` : "Failed" };
+                : p.status === "scheduled_retry" && !p.retryAt
+                  ? { tone: "amber", label: "Retrying" }
+                  : { tone: "red", label: p.retryAt ? `Failed · retry ${shortDate(p.retryAt)}` : "Failed" };
           return (
             <div key={p.id} className={`trow${failed ? " highlight" : ""}`} style={{ gridTemplateColumns: COLS, fontSize: 13 }}>
               <div className="cell-muted">{shortDate(p.paidAt)}</div>
@@ -127,7 +172,10 @@ export default async function PaymentsPage({
                 {p.reason && p.kind !== "subscription" && p.kind !== "top_up" && <div className="cell-sub">{p.reason}</div>}
               </div>
               <div style={{ fontWeight: 600 }}>{p.kind === "refund" ? "−" : ""}{inrPaise(p.amountPaise)}</div>
-              <div className="cell-muted">{METHOD_LABEL[p.method] ?? p.method}</div>
+              <div className="cell-muted">
+                {METHOD_LABEL[p.method] ?? p.method}
+                {!p.recordedBy && p.kind !== "goodwill" && p.kind !== "refund" && <div className="cell-sub">AutoPay</div>}
+              </div>
               <div><span className={`chip chip-${chip.tone}`}>{chip.label}</span></div>
               <div>{p.invoice ? <Link href={`/payments/invoices/${p.invoice.id}`} style={{ fontWeight: 600 }}>{p.invoice.number}</Link> : <span className="cell-muted">—</span>}</div>
               <PaymentMenu
@@ -150,10 +198,12 @@ export default async function PaymentsPage({
         </div>
       </div>
 
-      <div className="notice">
-        Until the Razorpay or Cashfree approval lands, charges are recorded here manually with a Record payment action, so the
-        ledger stays complete from day one.
-      </div>
+      {gateway.provider !== "cashfree" && (
+        <div className="notice">
+          Until Cashfree is connected, charges are recorded here manually with a Record payment action, so the ledger stays
+          complete from day one.
+        </div>
+      )}
     </>
   );
 }

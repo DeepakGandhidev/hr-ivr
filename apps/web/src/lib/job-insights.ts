@@ -1,5 +1,7 @@
-import { DEFAULT_SCREENING_THRESHOLD, SUPPORTED_LANGUAGES } from "@pratibha/shared";
-import { planClearsGate, platformSettings } from "@/lib/platform-settings";
+import { DEFAULT_SCREENING_THRESHOLD, interviewDefaults, SUPPORTED_LANGUAGES } from "@pratibha/shared";
+import { planAllows } from "@/lib/plan-features";
+import { platformSettings } from "@/lib/platform-settings";
+import { ACTIVE_CANDIDATE } from "@/lib/candidates";
 import type { TenantTransactionClient } from "@/lib/authz";
 import { describeCallWindows } from "@/lib/format";
 
@@ -21,10 +23,11 @@ type Tx = TenantTransactionClient;
 /** Scope a funnel count to one job, several jobs, or a whole tenant. */
 export type FunnelScope = { jobId: string } | { jobIds: string[] } | { tenantId: string };
 
+// Archived and not-an-application candidates count nowhere (Batch 7).
 function candidateScope(scope: FunnelScope) {
-  if ("jobId" in scope) return { jobId: scope.jobId };
-  if ("jobIds" in scope) return { jobId: { in: scope.jobIds } };
-  return { tenantId: scope.tenantId };
+  if ("jobId" in scope) return { jobId: scope.jobId, ...ACTIVE_CANDIDATE };
+  if ("jobIds" in scope) return { jobId: { in: scope.jobIds }, ...ACTIVE_CANDIDATE };
+  return { tenantId: scope.tenantId, ...ACTIVE_CANDIDATE };
 }
 
 /**
@@ -287,8 +290,11 @@ export function attentionFor(counts: JobCounts, publish: PublishInfo): Attention
 // Interview setup, after overrides
 // ---------------------------------------------------------------------------
 
-/** What the worker falls back to when neither the job nor the tenant set one. */
-const PROTOCOL_FALLBACK = { durationMinutes: 10, difficulty: "moderate", focusAreas: [] as string[] };
+/** What the worker falls back to when neither the job nor the tenant set one (admin panel defaults). */
+function protocolFallback() {
+  const d = interviewDefaults();
+  return { durationMinutes: d.durationMinutes, difficulty: d.difficulty as string, focusAreas: [] as string[] };
+}
 
 const LANGUAGE_NAMES: Record<string, string> = { en: "English", hi: "Hindi", hinglish: "Hinglish" };
 
@@ -317,8 +323,8 @@ export async function interviewSetupFor(tx: Tx, tenantId: string, jobId: string)
   const focus = Array.isArray(p?.focusAreas) ? (p!.focusAreas as unknown[]).map(String).filter(Boolean) : [];
 
   return {
-    durationMinutes: p?.durationMinutes ?? PROTOCOL_FALLBACK.durationMinutes,
-    difficulty: p?.difficulty ?? PROTOCOL_FALLBACK.difficulty,
+    durationMinutes: p?.durationMinutes ?? protocolFallback().durationMinutes,
+    difficulty: p?.difficulty ?? protocolFallback().difficulty,
     focusAreas: focus,
     languages: SUPPORTED_LANGUAGES.map((l) => LANGUAGE_NAMES[l] ?? l),
     callWindow: describeCallWindows(windows),
@@ -350,14 +356,16 @@ export interface DbConfig {
  */
 export async function dbConfigFor(tx: Tx, planId: string): Promise<DbConfig> {
   const [plan, settings] = await Promise.all([
-    tx.plan.findUnique({ where: { id: planId }, select: { key: true, features: true } }).catch(() => null),
+    tx.plan.findUnique({ where: { id: planId }, select: { key: true, features: true, limits: true } }).catch(() => null),
     platformSettings(),
   ]);
   const f = (plan?.features ?? {}) as Record<string, unknown>;
   const planGap = Number(f.reportScoreGapThreshold);
   return {
     scoreGapThreshold: Number.isFinite(planGap) && planGap > 0 ? planGap : settings.scoreGapThreshold,
-    portalPosts: f.portalPosts === false ? false : planClearsGate(plan?.key ?? planId, settings.portalPostsGate),
+    // The plan's own portal_posts switch when the admin panel set one, else
+    // the old rules (portalPosts: false, then the platform gate).
+    portalPosts: planAllows({ status: "active", planId, plan }, "portal_posts"),
   };
 }
 

@@ -1,3 +1,4 @@
+import { savedSetting } from './constants.js';
 import { gstStateCode } from './gst.js';
 
 /**
@@ -12,6 +13,21 @@ export const GST_RATE_PERCENT = 18;
 /** SAC for "Other information technology services". */
 export const DEFAULT_SAC_CODE = '998319';
 
+/**
+ * The GST rate for an invoice issued now: GST_RATE_PERCENT unless changed in
+ * the admin panel (billing.gst_rate_percent). Only new invoices read it - an
+ * issued invoice stores its tax in paise and its rate on each line, and is
+ * never recomputed.
+ */
+export function gstRatePercent(): number {
+  return savedSetting('billing.gst_rate_percent', GST_RATE_PERCENT);
+}
+
+/** The SAC printed on a new invoice's lines (billing.sac_code in the panel). */
+export function sacCode(): string {
+  return savedSetting('billing.sac_code', DEFAULT_SAC_CODE) || DEFAULT_SAC_CODE;
+}
+
 export interface InvoiceLineInput {
   description: string;
   /** HSN for goods, SAC for services. We sell services. */
@@ -23,6 +39,13 @@ export interface InvoiceLineInput {
 export interface InvoiceLine extends InvoiceLineInput {
   hsnSac: string;
   amountPaise: number;
+  /**
+   * The GST rate this line was taxed at. Recorded on the line, as a GST invoice
+   * states it, so the rate printed beside an issued invoice's tax is the one it
+   * was charged at even after the rate setting changes. Absent on invoices
+   * issued before it was recorded; those were all at 18%.
+   */
+  gstRatePercent: number;
 }
 
 export interface TaxSplit {
@@ -40,6 +63,8 @@ export interface InvoiceTotals {
   taxablePaise: number;
   tax: TaxSplit;
   totalPaise: number;
+  /** The rate applied, read once so the tax and the recorded rate agree. */
+  ratePercent: number;
 }
 
 /**
@@ -58,7 +83,7 @@ export function taxSplitFor(
   taxablePaise: number,
   sellerState: string | null | undefined,
   buyerState: string | null | undefined,
-  ratePercent: number = GST_RATE_PERCENT
+  ratePercent: number = gstRatePercent()
 ): TaxSplit {
   const total = Math.round((taxablePaise * ratePercent) / 100);
 
@@ -93,7 +118,7 @@ export function calculateInvoice({
   discountPaise = 0,
   sellerState,
   buyerState,
-  ratePercent = GST_RATE_PERCENT,
+  ratePercent = gstRatePercent(),
 }: {
   lines: InvoiceLineInput[];
   discountPaise?: number;
@@ -101,10 +126,12 @@ export function calculateInvoice({
   buyerState: string | null | undefined;
   ratePercent?: number;
 }): InvoiceTotals {
+  const sac = sacCode();
   const priced: InvoiceLine[] = lines.map((line) => ({
     ...line,
-    hsnSac: line.hsnSac ?? DEFAULT_SAC_CODE,
+    hsnSac: line.hsnSac ?? sac,
     amountPaise: Math.round(line.quantity * line.unitPaise),
+    gstRatePercent: ratePercent,
   }));
 
   const subtotalPaise = priced.reduce((sum, l) => sum + l.amountPaise, 0);
@@ -117,7 +144,7 @@ export function calculateInvoice({
   const tax = taxSplitFor(taxablePaise, sellerState, buyerState, ratePercent);
   const totalPaise = taxablePaise + tax.cgstPaise + tax.sgstPaise + tax.igstPaise;
 
-  return { lines: priced, subtotalPaise, discountPaise: discount, taxablePaise, tax, totalPaise };
+  return { lines: priced, subtotalPaise, discountPaise: discount, taxablePaise, tax, totalPaise, ratePercent };
 }
 
 /** Paise to a rupee string, for display and for the invoice itself. */

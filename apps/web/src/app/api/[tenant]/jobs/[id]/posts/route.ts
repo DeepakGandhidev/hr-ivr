@@ -1,8 +1,8 @@
 import { NextRequest } from "next/server";
-import { Action, ForbiddenError, NotFoundError, ValidationError, writeAuditLog } from "@pratibha/shared";
+import { Action, NotFoundError, ValidationError, writeAuditLog } from "@pratibha/shared";
 import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
-import { dbConfigFor } from "@/lib/job-insights";
+import { assertPlanAllows } from "@/lib/plan-features";
 import { z } from "zod";
 
 /** Portals a post can be copied for. The careers page has its own publish flow. */
@@ -16,7 +16,8 @@ const bodySchema = z.object({ channel: z.enum(["naukri", "linkedin"]) });
  * JD version it was built from are recorded so the Publish tab can say when the
  * portal copy has gone stale.
  *
- * Available per plan, from plans.features in the database (see dbConfigFor).
+ * Available per plan: the plan's portal_posts feature, else gate.portal_posts
+ * (see plan-features.ts).
  */
 export async function POST(
   request: NextRequest,
@@ -31,10 +32,7 @@ export async function POST(
     const { channel } = parsed.data;
 
     return withTenantAuth(tenant, Action.jobPublish, async (ctx, tx) => {
-      const config = await dbConfigFor(tx, ctx.tenant.planId);
-      if (!config.portalPosts) {
-        throw new ForbiddenError("Job portal posts are not included in your plan.");
-      }
+      assertPlanAllows(ctx.tenant, "portal_posts", "Job portal posts are not included in your plan.");
 
       const job = await tx.job.findFirst({
         where: { id, deletedAt: null },

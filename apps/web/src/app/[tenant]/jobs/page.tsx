@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import ActionMenu, { type ActionMenuItem } from "@/components/ActionMenu";
+import { useCopy } from "@/lib/copy-client";
 import { useArchiveJob } from "@/components/JobActions";
 import {
   attentionText,
@@ -61,6 +62,7 @@ function byLongestOpen(a: CardJob, b: CardJob): number {
  */
 export default function JobsPage({ params }: { params: { tenant: string } }) {
   const { tenant } = params;
+  const t = useCopy();
   const [view, setView] = useState<View>("open");
   const [jobs, setJobs] = useState<CardJob[] | null>(null);
   const [tabs, setTabs] = useState<{ open: number; archived: number } | null>(null);
@@ -125,12 +127,12 @@ export default function JobsPage({ params }: { params: { tenant: string } }) {
       <div className="job-head">
         <div className="job-head-row">
           <div className="job-head-text">
-            <h1>Jobs</h1>
-            <p className="job-intro">Roles you are hiring for. Applications are filed against these.</p>
+            <h1>{t("copy.portal.jobs.title")}</h1>
+            <p className="job-intro">{t("copy.portal.jobs.intro")}</p>
           </div>
           <div className="job-head-actions">
             <Link href={`/${tenant}/jobs/new`} className="btn-ink">
-              New job
+              {t("copy.portal.jobs.new_job")}
             </Link>
           </div>
         </div>
@@ -140,12 +142,12 @@ export default function JobsPage({ params }: { params: { tenant: string } }) {
 
       {noJobsAtAll ? (
         <div className="jm-card empty">
-          <h3>No jobs yet</h3>
+          <h3>{t("copy.portal.jobs.empty_title")}</h3>
           <p>
-            Create a job first. Applications need a role to be filed against before a mailbox can import them.
+            {t("copy.portal.jobs.empty_body")}
           </p>
           <Link href={`/${tenant}/jobs/new`} className="btn-ink" style={{ marginTop: 16 }}>
-            Create your first job
+            {t("copy.portal.jobs.empty_button")}
           </Link>
         </div>
       ) : (
@@ -186,10 +188,10 @@ export default function JobsPage({ params }: { params: { tenant: string } }) {
             <div className="jm-card empty">
               <p>
                 {query.trim()
-                  ? `No ${view === "archived" ? "archived " : ""}roles match “${query.trim()}”.`
+                  ? t(view === "archived" ? "copy.portal.jobs.no_match_archived" : "copy.portal.jobs.no_match", { query: query.trim() })
                   : view === "archived"
-                    ? "No archived roles."
-                    : "No open roles. Archived ones are under the Archived tab."}
+                    ? t("copy.portal.jobs.none_archived")
+                    : t("copy.portal.jobs.none_open")}
               </p>
             </div>
           ) : (

@@ -1,21 +1,17 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
-import { openSecret } from '@pratibha/shared/crypto';
+import { setting } from '@pratibha/shared/settings-runtime';
 
 import { chooseCvAttachment } from './extractText.js';
+import { imapAuthFor } from './mailAuth.js';
 
 /**
- * IMAP ingestion for mailboxes that offer no OAuth — cPanel/webmail (Dovecot),
- * Zoho, Namecheap, and most hosting-provider mail. This is the path that needs
- * no MX change and no DNS change of any kind: the mailbox already exists and
- * already receives the mail; we just read it.
+ * IMAP ingestion: cPanel/webmail (Dovecot), Zoho, Namecheap and most
+ * hosting-provider mail with a password, and Gmail/Outlook with an OAuth access
+ * token (XOAUTH2). This is the path that needs no MX change and no DNS change
+ * of any kind: the mailbox already exists and already receives the mail; we
+ * just read it.
  */
-
-/** Never pull an unbounded number of messages in one tick. */
-const DEFAULT_MAX_PER_POLL = 50;
-
-/** On a first connect there is no watermark, so look back this far instead. */
-const FIRST_RUN_LOOKBACK_DAYS = 7;
 
 const CONNECT_TIMEOUT_MS = 20_000;
 const SOCKET_TIMEOUT_MS = 60_000;
@@ -26,18 +22,15 @@ function requireField(connection, field) {
   return value;
 }
 
-function buildClient(connection) {
-  const password = openSecret(requireField(connection, 'imapSecret'));
+async function buildClient(connection, logger) {
+  const host = requireField(connection, 'imapHost');
+  const auth = await imapAuthFor(connection, logger);
 
-  return new ImapFlow({
-    host: requireField(connection, 'imapHost'),
+  const client = new ImapFlow({
+    host,
     port: connection.imapPort ?? 993,
     secure: connection.imapSecure !== false,
-    auth: {
-      // cPanel and most shared hosts want the full address as the username.
-      user: connection.imapUsername || connection.address,
-      pass: password,
-    },
+    auth,
     connectionTimeout: CONNECT_TIMEOUT_MS,
     greetingTimeout: CONNECT_TIMEOUT_MS,
     socketTimeout: SOCKET_TIMEOUT_MS,
@@ -45,6 +38,18 @@ function buildClient(connection) {
     // credential exchange; the caller's logger carries what we actually need.
     logger: false,
   });
+
+  // ImapFlow reports a dead socket (e.g. "Socket timeout" from a host that has
+  // stopped answering) as an 'error' event. With no listener Node treats that
+  // as uncaught and kills the whole worker - calls, poller and the forwarding
+  // receiver with it - and the restart forgets the backoff, so it happened
+  // again every minute. The pending operation still rejects and is handled by
+  // its caller; this only stops the event from being fatal.
+  client.on('error', (err) => {
+    logger?.warn?.({ connectionId: connection.id, err: err?.message }, 'IMAP connection error');
+  });
+
+  return client;
 }
 
 /** BigInt-safe: Prisma hands these back as BigInt, IMAP gives numbers. */
@@ -57,7 +62,8 @@ function toBigInt(value) {
   }
 }
 
-async function normalise(source, uid) {
+/** Parse a raw RFC 822 message into what the ingestion pipeline reads. */
+export async function normalise(source, uid) {
   const mail = await simpleParser(source);
 
   const fromAddress = mail.from?.value?.[0]?.address ?? null;
@@ -100,10 +106,15 @@ async function normalise(source, uid) {
 /**
  * Fetch messages that arrived since the last successful poll.
  *
+ * Never more than `email.max_per_poll` in one tick (unless the caller passes
+ * `maxPerPoll`), and on a first connect, with no watermark, mail from the last
+ * `email.first_lookback_days`. Both are read per poll, so the admin panel
+ * applies without a restart.
+ *
  * @returns {Promise<{messages: Array, uidValidity: bigint|null, highestUid: bigint|null}>}
  */
-export async function fetchNewMessages(connection, { logger = console, maxPerPoll = DEFAULT_MAX_PER_POLL } = {}) {
-  const client = buildClient(connection);
+export async function fetchNewMessages(connection, { logger = console, maxPerPoll = setting('email.max_per_poll') } = {}) {
+  const client = await buildClient(connection, logger);
   const messages = [];
   let highestUid = toBigInt(connection.lastSeenUid);
   let uidValidity = null;
@@ -132,7 +143,7 @@ export async function fetchNewMessages(connection, { logger = console, maxPerPol
     if (watermark === null) {
       // First run (or a reset): a date window, so connecting a mailbox with
       // 40,000 messages does not enqueue 40,000 candidates.
-      const since = new Date(Date.now() - FIRST_RUN_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+      const since = new Date(Date.now() - setting('email.first_lookback_days') * 24 * 60 * 60 * 1000);
       uids = await client.search({ since }, { uid: true });
     } else {
       // `n:*` is an IMAP range, and the server returns the highest UID even
@@ -176,9 +187,10 @@ export async function fetchNewMessages(connection, { logger = console, maxPerPol
  * page can tell an HR user "wrong password" at the moment they hit Save rather
  * than silently ten minutes later in a poller log.
  */
-export async function verifyConnection(connection) {
-  const client = buildClient(connection);
+export async function verifyConnection(connection, logger = console) {
+  let client;
   try {
+    client = await buildClient(connection, logger);
     await client.connect();
     const lock = await client.getMailboxLock(connection.folder || 'INBOX');
     try {
@@ -194,7 +206,7 @@ export async function verifyConnection(connection) {
   } catch (err) {
     return { ok: false, error: err.message };
   } finally {
-    await client.logout().catch(() => {});
+    await client?.logout().catch(() => {});
   }
 }
 
@@ -204,7 +216,6 @@ export async function verifyConnection(connection) {
  * which means a dropped IDLE socket degrades to polling rather than to silence.
  */
 const IDLE_BACKOFF_CAP_MS = 6 * 60 * 60 * 1000;
-const ROLL_OFF_ATTEMPTS = 12;
 
 export function watchMailbox(connection, onNewMail, logger = console) {
   let client = null;
@@ -215,7 +226,7 @@ export function watchMailbox(connection, onNewMail, logger = console) {
   async function run() {
     while (!stopped) {
       try {
-        client = buildClient(connection);
+        client = await buildClient(connection, logger);
         await client.connect();
         await client.mailboxOpen(connection.folder || 'INBOX');
         backoffMs = 5_000;
@@ -246,10 +257,11 @@ export function watchMailbox(connection, onNewMail, logger = console) {
       // it is a steady login attempt every five minutes, all day, for as long
       // as the mailbox stays broken. The production host's firewall read three
       // of those against one server as a brute-force attempt and banned the IP.
-      // So the cap is hours now, and after ROLL_OFF_ATTEMPTS the watcher stops
-      // rather than retrying something that has failed for half a day.
+      // So the cap is hours now, and after `email.failure_rolloff` attempts (the
+      // same count the poller uses) the watcher stops rather than retrying
+      // something that has failed for half a day.
       attempts += 1;
-      if (attempts >= ROLL_OFF_ATTEMPTS) {
+      if (attempts >= setting('email.failure_rolloff')) {
         logger.warn?.(
           { connectionId: connection.id, address: connection.address, attempts },
           'IMAP IDLE giving up until the mailbox is reconnected'

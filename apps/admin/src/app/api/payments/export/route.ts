@@ -6,6 +6,7 @@ import { paymentWhere, type PaymentFilter } from "@/lib/payments-admin";
 import { recordActivity } from "@/lib/activity";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const cell = (v: unknown) => {
   const s = v === null || v === undefined ? "" : String(v);

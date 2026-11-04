@@ -29,6 +29,7 @@ async function issueInvite(admin: AdminUser, target: { id: string; name: string;
   });
   const link = inviteLink(token);
   const mail = await sendMail({
+    kind: "admin_invite",
     to: target.email,
     subject: "You have been invited to the Pratibha admin panel",
     text: `Hi ${target.name},\n\n${admin.name} has invited you to the Pratibha admin panel as ${ROLE_LABEL[target.role]}.\n\nSet your password here within ${INVITE_HOURS} hours:\n\n${link}\n\nYou will then turn on two step verification.\n\nPratibha`,

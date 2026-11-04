@@ -1,3 +1,4 @@
+import { DATA_CONSEQUENCES } from "@/lib/subscription";
 import { NextRequest } from "next/server";
 import { Action } from "@pratibha/shared";
 import { withTenantAuth } from "@/lib/authz";
@@ -5,6 +6,11 @@ import { handleApi } from "@/lib/api-errors";
 import { planView, subscriptionOverview, topUpPacks } from "@/lib/subscription";
 import { currentPlans } from "@/lib/pricing";
 import { paymentProvider } from "@/lib/payments";
+import { cashfreeConfig } from "@/lib/cashfree";
+import { syncMandate } from "@/lib/autopay";
+import { syncOrder } from "@/lib/checkout";
+import { adminPrisma } from "@pratibha/prisma";
+import { planEntitlements } from "@/lib/plan-features";
 
 export const runtime = "nodejs";
 
@@ -20,6 +26,30 @@ export async function GET(
   { params }: { params: { tenant: string } }
 ) {
   const { tenant } = params;
+  // Back from the gateway's checkout: ask it directly rather than wait on the
+  // webhook, so the page shows the mandate as it now is. Only for a reference
+  // that is this workspace's own, which the prefix and the lookup both check.
+  const returned = request.nextUrl.searchParams.get("autopay");
+  if (returned?.startsWith("prt_") && paymentProvider().name === "cashfree") {
+    await withTenantAuth(tenant, Action.billingRead, async (_ctx, tx) =>
+      tx.paymentMethod.findFirst({ where: { providerRef: returned, mandateStatus: "pending" }, select: { id: true } })
+    )
+      .then((pending) => (pending ? syncMandate(returned) : undefined))
+      .catch((err) => console.error("[cashfree] mandate status check failed", err));
+  }
+  // Back from a one-time checkout: settle it now if Cashfree says it is paid.
+  const orderId = request.nextUrl.searchParams.get("order_id");
+  let checkoutStatus: string | null = null;
+  if (orderId && paymentProvider().name === "cashfree") {
+    checkoutStatus = await withTenantAuth(tenant, Action.billingRead, async (ctx) =>
+      adminPrisma.checkoutOrder.findFirst({ where: { orderId, tenantId: ctx.tenant.id }, select: { status: true } })
+    )
+      .then(async (order) => (order ? (order.status === "pending" ? syncOrder(orderId) : order.status) : null))
+      .catch((err) => {
+        console.error("[cashfree] order status check failed", err);
+        return null;
+      });
+  }
   return handleApi(() =>
     withTenantAuth(tenant, Action.billingRead, async (ctx, tx) => {
       const overview = await subscriptionOverview(tx, ctx.tenant);
@@ -75,13 +105,31 @@ export async function GET(
         topUpPacks: packs,
         // Keyed by plan key: choosing one moves the workspace to that plan's
         // newest published version.
-        plans: plans.map((p) => ({ ...planView(p), id: p.key })),
+        plans: plans.map((p) => ({
+          ...planView(p),
+          id: p.key,
+          // Every catalogue feature and limit this plan includes (limits null
+          // is unlimited), from the admin panel's Plans page.
+          entitlements: planEntitlements({ status: "active", planId: p.id, plan: p, trial: null }),
+        })),
+        // What this workspace has now, the trial's allowances included.
+        entitlements: planEntitlements(ctx.tenant),
         // The UI says "no gateway configured" rather than offering a button
         // that cannot work.
-        gateway: { name: provider.name, canCharge: provider.canCharge },
+        gateway: {
+          name: provider.name,
+          canCharge: provider.canCharge,
+          // Which Cashfree checkout the browser opens; null for other providers.
+          mode: provider.name === "cashfree" ? cashfreeConfig()?.mode ?? null : null,
+        },
         // Whether this viewer may act, so the page can explain rather than
         // simply fail. The server checks again on every action regardless.
         canManage: ctx.user.role === "owner",
+        retentionDays: DATA_CONSEQUENCES.deletedAfterDays,
+        // The owner's own number, prefilled so they type it once.
+        billingPhone: ctx.user.role === "owner" ? overview.subscription.billingPhone : null,
+        // The outcome of a checkout they have just come back from.
+        checkoutStatus,
       };
     })
   );

@@ -2,24 +2,96 @@ import { STATES, TERMINAL, TOOLS_BY_STATE, isVerified } from './states.js';
 import { lookupCandidateByEmail, recordInterviewCall, updateInterviewCall } from '../db/index.js';
 import { isTenantPaused } from './tenantStatus.js';
 import { emailsMatch } from './emailMatch.js';
+import { SUPPORTED_LANGUAGES, fillBlock, formatBandSpoken, interviewOptionsFrom, parseCtc, salaryVerdict } from '@pratibha/shared';
+import { setting, settingText } from '@pratibha/shared/settings-runtime';
+import { SETTINGS_BY_KEY } from '@pratibha/shared/settings-registry';
+
+/**
+ * Fill {placeholders} in an AI step instruction. Only the names in `vars` are
+ * replaced (a missing value becomes empty); any other {word} an admin typed is
+ * passed on as written.
+ */
+export function fillStep(text, vars = {}) {
+  return String(text).replace(/\{(\w+)\}/g, (whole, name) =>
+    Object.hasOwn(vars, name) ? String(vars[name] ?? '') : whole
+  );
+}
+
+/**
+ * One of the AI's step instructions (group ai_steps), as configured right now:
+ * the admin panel's text, else the shipped default, with placeholders filled.
+ * Read at the moment of use so a change reaches the next call without a restart.
+ */
+export function aiStep(key, vars) {
+  const fallback = SETTINGS_BY_KEY[key]?.default;
+  if (typeof fallback !== 'string') throw new Error(`Unknown AI step ${key}`);
+  return fillStep(settingText(key, fallback), vars);
+}
+
+const LANGUAGE_NAMES = { en: 'English', hi: 'Hindi', hinglish: 'Hinglish' };
+
+/** Interview languages offered on calls (ai_steps.languages), unknown codes dropped. */
+export function offeredLanguages() {
+  const saved = setting('ai_steps.languages');
+  const codes = (Array.isArray(saved) ? saved : [])
+    .map(c => String(c).trim().toLowerCase())
+    .filter(c => SUPPORTED_LANGUAGES.includes(c));
+  const unique = [...new Set(codes)];
+  return unique.length ? unique : [...SUPPORTED_LANGUAGES];
+}
+
+/** The offered languages as she would say them: "English, Hindi, or Hinglish". */
+export function languagesSpoken(codes = offeredLanguages()) {
+  const names = codes.map(c => LANGUAGE_NAMES[c] ?? c);
+  if (names.length <= 1) return names[0] ?? '';
+  if (names.length === 2) return `${names[0]} or ${names[1]}`;
+  return `${names.slice(0, -1).join(', ')}, or ${names.at(-1)}`;
+}
+
+/** This call's interview length in minutes: the job's, else the platform default. */
+export function interviewMinutes(session) {
+  return Number(session?.interviewProtocol?.durationMinutes) || setting('calls.default_duration_minutes');
+}
+
+/** Screener answers as stored on the call (I20). Field → record key. */
+const DETAIL_FIELDS = {
+  notice_period: 'noticePeriod',
+  current_ctc: 'currentCtc',
+  expected_ctc: 'expectedCtc',
+  reason_for_leaving: 'reasonForLeaving',
+  gap_explanation: 'gapExplanation',
+  location: 'location',
+  work_mode: 'workMode',
+  travel: 'travel',
+  reference_name: 'referenceName',
+  reference_phone: 'referencePhone',
+  reference_relation: 'referenceRelation',
+  band_answer: 'bandAnswer',
+};
 
 function deriveCriteria(job) {
   const mustHaves = Array.isArray(job?.mustHaves) ? job.mustHaves : [];
   const goodToHaves = Array.isArray(job?.goodToHaves) ? job.goodToHaves : [];
+  const mustWeight = setting('screening.must_have_weight');
+  const niceWeight = setting('screening.nice_to_have_weight');
   return [
     ...mustHaves.map((text, i) => ({
       id: i + 1,
       criterion: text,
-      weight: 5,
-      evaluation_guidance: 'Must-have for this role.'
+      weight: mustWeight,
+      evaluation_guidance: aiStep('ai_steps.criteria.must_have_guidance')
     })),
     ...goodToHaves.map((text, i) => ({
       id: mustHaves.length + i + 1,
       criterion: text,
-      weight: 3,
-      evaluation_guidance: 'Nice-to-have for this role.'
+      weight: niceWeight,
+      evaluation_guidance: aiStep('ai_steps.criteria.nice_to_have_guidance')
     }))
   ];
+}
+
+function timesSaid(n) {
+  return n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`;
 }
 
 function attachCandidate(session, lookup) {
@@ -28,11 +100,16 @@ function attachCandidate(session, lookup) {
   session.tenant = lookup.tenant;
   session.latestApprovedJd = lookup.latestApprovedJd;
   session.interviewProtocol = lookup.interviewProtocol;
+  session.screeningGaps = lookup.screeningGaps ?? [];
+  if (lookup.promptBlocks) session.promptBlocks = lookup.promptBlocks;
   session.approved = lookup.approved;
   session.alreadyInterviewed = lookup.hasCompleted;
   session.criteria = deriveCriteria(lookup.job);
 }
 
+// The built-in wording for each escalation. The spoken line is the matching
+// scripts.escalate_* setting; these stand in whenever one is empty, so an
+// escalation always says something before the line drops.
 const ESCALATION_LINES = {
   asked_for_human:
     "Of course, that's no problem at all. I'll pass that on to the team and someone will be in touch with you by email. Thanks very much for your time today.",
@@ -45,6 +122,20 @@ const ESCALATION_LINES = {
   other:
     "I'm sorry, I'm not able to continue with this call. I'll pass it on to the team and someone will be in touch by email. Thank you for your time."
 };
+
+const ESCALATION_SETTINGS = {
+  asked_for_human: 'scripts.escalate_human',
+  hostile_or_distressed: 'scripts.escalate_hostile',
+  line_quality: 'scripts.escalate_line',
+  identity_mismatch: 'scripts.escalate_identity',
+  other: 'scripts.escalate_other',
+};
+
+/** What she says on an escalation of this category, as configured now. */
+export function escalationLine(category) {
+  const known = Object.hasOwn(ESCALATION_LINES, category) ? category : 'other';
+  return settingText(ESCALATION_SETTINGS[known], ESCALATION_LINES[known]);
+}
 
 export const TOOL_DEFINITIONS = {
   provide_email: {
@@ -104,6 +195,18 @@ export const TOOL_DEFINITIONS = {
       required: ['granted']
     }
   },
+  record_detail: {
+    name: 'record_detail',
+    description: 'Record the candidate\'s answer to one of the practical questions, in their own words. For salaries, pass the figure exactly as they said it; it is converted to an annual figure for you. Follow any instruction or say_exactly in the result.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        field: { type: 'string', enum: Object.keys(DETAIL_FIELDS) },
+        value: { type: 'string', description: 'What they said, in their words' }
+      },
+      required: ['field', 'value']
+    }
+  },
   finish_screening: {
     name: 'finish_screening',
     description: 'Call when you have covered the screening criteria and are ready to invite the candidate\'s own questions. List which criteria you actually reached and which you did not, with the reason.',
@@ -159,6 +262,26 @@ export const TOOL_DEFINITIONS = {
   }
 };
 
+/**
+ * A tool as offered to the model right now. Only the description is editable
+ * (ai_steps.tool.*); the name and input schema are fixed, apart from
+ * select_language's choices, which are the languages currently offered.
+ */
+export function toolDefinition(name) {
+  const def = TOOL_DEFINITIONS[name];
+  if (!def) return null;
+  const description = aiStep(`ai_steps.tool.${name}`, { languages: languagesSpoken() });
+  if (name !== 'select_language') return { ...def, description };
+  return {
+    ...def,
+    description,
+    input_schema: {
+      ...def.input_schema,
+      properties: { language: { ...def.input_schema.properties.language, enum: offeredLanguages() } }
+    }
+  };
+}
+
 export class ToolExecutor {
   constructor(config, logger) {
     this.config = config;
@@ -166,7 +289,7 @@ export class ToolExecutor {
   }
 
   definitionsFor(state) {
-    return (TOOLS_BY_STATE[state] ?? []).map(name => TOOL_DEFINITIONS[name]).filter(Boolean);
+    return (TOOLS_BY_STATE[state] ?? []).map(toolDefinition).filter(Boolean);
   }
 
   async execute(name, input, session) {
@@ -180,6 +303,7 @@ export class ToolExecutor {
       case 'select_language': return this.#selectLanguage(input, session);
       case 'record_time_consent': return this.#timeConsent(input, session);
       case 'record_recording_consent': return this.#recordingConsent(input, session);
+      case 'record_detail': return this.#recordDetail(input, session);
       case 'finish_screening': return this.#finishScreening(input, session);
       case 'escalate': return this.#escalate(input, session);
       case 'end_call': return this.#endCall(input, session);
@@ -194,10 +318,11 @@ export class ToolExecutor {
    * spoofing an inbound CLI is not hard. Confirming the address on their
    * application before any interview question is asked closes that gap.
    *
-   * Two attempts, because the recogniser mangles spoken addresses far more
-   * often than a real candidate forgets their own email. After that the call
-   * ends rather than interviewing someone unverified — and it is logged, since
-   * a repeated failure is exactly what an impostor looks like.
+   * Two attempts by default (calls.email_verify_attempts), because the
+   * recogniser mangles spoken addresses far more often than a real candidate
+   * forgets their own email. After that the call ends rather than
+   * interviewing someone unverified — and it is logged, since a repeated
+   * failure is exactly what an impostor looks like.
    */
   async #confirmEmail({ email }, session) {
     const onFile = session.candidate?.email;
@@ -209,7 +334,7 @@ export class ToolExecutor {
       session.setState(STATES.LANGUAGE_SELECT);
       return {
         verified: null,
-        instruction: 'Thank them and ask whether they would like to continue in English, Hindi, or Hinglish.'
+        instruction: aiStep('ai_steps.confirm_email.no_email_on_file', { languages: languagesSpoken() })
       };
     }
 
@@ -222,7 +347,10 @@ export class ToolExecutor {
       return {
         verified: true,
         candidate_name: session.candidate?.name ?? null,
-        instruction: 'Thank them by first name now that they are confirmed, then ask whether they would like to continue in English, Hindi, or Hinglish. Do not greet them again or re-introduce yourself.'
+        instruction: aiStep('ai_steps.confirm_email.verified', {
+          name: session.candidate?.name,
+          languages: languagesSpoken()
+        })
       };
     }
 
@@ -241,7 +369,7 @@ export class ToolExecutor {
         return {
           verified: true,
           already_interviewed: true,
-          instruction: 'Say you already have a completed interview on file for this role, thank them, and end the call warmly.'
+          instruction: aiStep('ai_steps.identity.already_interviewed')
         };
       }
 
@@ -261,31 +389,36 @@ export class ToolExecutor {
         verified: true,
         candidate_name: other.candidate.name ?? null,
         job_title: other.job?.title ?? null,
-        instruction: 'This is a different candidate to the one the number is registered to, which is fine. Greet them by first name, confirm the role you have them down for, then ask whether they would like to continue in English, Hindi, or Hinglish. Do not re-introduce yourself.'
+        instruction: aiStep('ai_steps.confirm_email.other_candidate', {
+          name: other.candidate.name,
+          job_title: other.job?.title,
+          languages: languagesSpoken()
+        })
       };
     }
 
     session.emailAttempts = (session.emailAttempts ?? 0) + 1;
     session.transcript?.record('identity.mismatch', { heard: email, attempt: session.emailAttempts });
 
-    if (session.emailAttempts >= 2) {
+    const allowed = setting('calls.email_verify_attempts');
+    if (session.emailAttempts >= allowed) {
       session.emailVerified = false;
       session.unknownReason = {
         reasonCode: 'identity_failed',
-        reason: 'The number matched a candidate, but the email check failed twice',
+        reason: `The number matched a candidate, but the email check failed ${timesSaid(session.emailAttempts)}`,
       };
       session.finish(TERMINAL.UNKNOWN_CALLER);
       return {
         verified: false,
         attempts_exhausted: true,
-        instruction: 'Say you were not able to confirm their details, that the team will follow up by email, thank them warmly, and end the call. Do not say what the correct address is.'
+        instruction: aiStep('ai_steps.confirm_email.attempts_exhausted')
       };
     }
 
     return {
       verified: false,
-      attempts_remaining: 1,
-      instruction: 'Say the line may have broken up, and ask them to say just the part of their email address before the "at" sign, slowly. Never suggest they gave the wrong address, never reveal the address on file, and never read any part of it back to them.'
+      attempts_remaining: allowed - session.emailAttempts,
+      instruction: aiStep('ai_steps.confirm_email.retry', { attempts_left: allowed - session.emailAttempts })
     };
   }
 
@@ -300,7 +433,7 @@ export class ToolExecutor {
       session.finish(TERMINAL.UNKNOWN_CALLER);
       return {
         recognised: false,
-        instruction: 'Politely say you cannot find an application under that email address, ask them to check it and apply again if needed, thank them, and end the call.'
+        instruction: aiStep('ai_steps.provide_email.not_found')
       };
     }
 
@@ -316,7 +449,7 @@ export class ToolExecutor {
       session.finish(TERMINAL.UNKNOWN_CALLER);
       return {
         recognised: false,
-        instruction: 'Say interviews for this role are paused at the moment so you cannot go ahead today, that the team will be in touch by email, thank them, and end the call. Do not say why.'
+        instruction: aiStep('ai_steps.provide_email.paused')
       };
     }
 
@@ -333,7 +466,7 @@ export class ToolExecutor {
       return {
         recognised: true,
         approved: false,
-        instruction: 'Say you found the email but the candidate is not currently on the approved shortlist. Thank them and end the call.'
+        instruction: aiStep('ai_steps.provide_email.not_shortlisted')
       };
     }
 
@@ -343,7 +476,7 @@ export class ToolExecutor {
         recognised: true,
         approved: true,
         already_interviewed: true,
-        instruction: 'Say you already have a completed interview on file for this role, thank them, and end the call warmly.'
+        instruction: aiStep('ai_steps.identity.already_interviewed')
       };
     }
 
@@ -353,17 +486,29 @@ export class ToolExecutor {
       recognised: true,
       candidate_name: lookup.candidate.name,
       job_title: lookup.job.title,
-      instruction: 'Confirm their name and the role, then ask whether they would like to continue in English, Hindi, or Hinglish.'
+      instruction: aiStep('ai_steps.provide_email.found', {
+        name: lookup.candidate.name,
+        job_title: lookup.job.title,
+        languages: languagesSpoken()
+      })
     };
   }
 
   async #selectLanguage({ language }, session) {
+    const offered = offeredLanguages();
+    if (!offered.includes(language)) {
+      return { error: `${language} is not offered. Offer only: ${languagesSpoken(offered)}.` };
+    }
     session.language = language;
     session.setState(STATES.CONSENT_TIME);
     await this.#patch(session, { language });
     return {
       language,
-      instruction: 'Confirm the language choice, say the call takes ten to fifteen minutes, and ask whether now is a good time.'
+      // The real length of this interview, not a fixed "ten to fifteen".
+      instruction: aiStep('ai_steps.select_language.chosen', {
+        minutes: interviewMinutes(session),
+        language: LANGUAGE_NAMES[language] ?? language
+      })
     };
   }
 
@@ -372,7 +517,7 @@ export class ToolExecutor {
       session.timeConsent = 'withdrew';
       session.finish(TERMINAL.DECLINED_CONSENT);
       await this.#patch(session, { status: 'declined_consent' });
-      return { instruction: 'Thank them for letting us know and end the call warmly.' };
+      return { instruction: aiStep('ai_steps.time_consent.withdrawn') };
     }
 
     if (!proceed) {
@@ -389,7 +534,7 @@ export class ToolExecutor {
 
     session.timeConsent = 'now';
     session.setState(STATES.CONSENT_RECORDING);
-    return { instruction: 'Now ask for permission to record the call so the team can review their answers properly.' };
+    return { instruction: aiStep('ai_steps.time_consent.proceed') };
   }
 
   async #recordingConsent({ granted }, session) {
@@ -397,7 +542,7 @@ export class ToolExecutor {
     session.recordingStarted = Boolean(granted);
     // The clock starts when questioning does, not when the phone was answered:
     // greeting, identity and consent should not eat into the interview.
-    const minutes = Number(session.interviewProtocol?.durationMinutes) || 10;
+    const minutes = interviewMinutes(session);
     session.deadlineAt = Date.now() + minutes * 60_000;
     session.transcript?.record('interview.started', { durationMinutes: minutes });
 
@@ -406,8 +551,60 @@ export class ToolExecutor {
     await this.#patch(session, { recordingConsent: session.recordingConsent });
 
     return granted
-      ? { recording: true, instruction: 'Thank them and begin the screening questions.' }
-      : { recording: false, instruction: 'Tell them that is absolutely fine, you will not record and will take notes instead, then begin the screening questions.' };
+      ? { recording: true, instruction: aiStep('ai_steps.recording_consent.granted', { minutes }) }
+      : { recording: false, instruction: aiStep('ai_steps.recording_consent.declined', { minutes }) };
+  }
+
+  /**
+   * I12 / I20. One screener answer onto the call record. Salaries are parsed
+   * to an annual figure here, not by the model, and the mismatch policy is
+   * applied here too: what she says about a band is a fixed line from the
+   * block library, so she can state it but never negotiate it.
+   */
+  async #recordDetail({ field, value }, session) {
+    const key = DETAIL_FIELDS[field];
+    if (!key) return { error: `Unknown field ${field}` };
+    const details = (session.practicalDetails ??= {});
+    const said = String(value ?? '').trim().slice(0, 500);
+
+    if (field === 'current_ctc' || field === 'expected_ctc') {
+      details[key] = { said, annual: parseCtc(said) };
+    } else {
+      details[key] = said;
+    }
+
+    let result = { recorded: true, instruction: aiStep('ai_steps.record_detail.recorded') };
+
+    if (field === 'expected_ctc') {
+      const options = interviewOptionsFrom(session.interviewProtocol);
+      const bandMax = session.job?.salaryMax ?? null;
+      const verdict = salaryVerdict(details.expectedCtc.annual, bandMax);
+      if (verdict === 'above') {
+        session.salaryMismatch = true;
+        details.salaryMismatch = { expectedAnnual: details.expectedCtc.annual, bandMax, action: options.mismatchAction };
+        session.transcript?.record('salary.mismatch', { expected: details.expectedCtc.annual, bandMax, action: options.mismatchAction });
+        const band = formatBandSpoken(session.job?.salaryMin ?? null, bandMax);
+        const line = (name) => fillBlock(session.promptBlocks?.blocks?.[name] ?? '', { band });
+
+        if (options.mismatchAction === 'check' && line('line_salary_check')) {
+          result = { recorded: true, say_exactly: line('line_salary_check'), instruction: aiStep('ai_steps.record_detail.salary_check_followup') };
+        } else if (options.mismatchAction === 'end' && line('line_salary_end')) {
+          // Wrapped up, not cut off: the call still counts as completed, and
+          // the report is written with the mismatch on it.
+          session.screeningFinished = true;
+          session.finish(TERMINAL.COMPLETED);
+          result = { recorded: true, say_exactly: line('line_salary_end'), ended: true };
+        } else {
+          result = { recorded: true, instruction: aiStep('ai_steps.record_detail.salary_noted') };
+        }
+      }
+    }
+
+    await this.#patch(session, {
+      practicalDetails: details,
+      ...(session.salaryMismatch ? { salaryMismatch: true } : {}),
+    });
+    return result;
   }
 
   async #finishScreening({ criteria_covered = [], criteria_not_covered = [] }, session) {
@@ -415,7 +612,10 @@ export class ToolExecutor {
     session.criteriaNotCovered = criteria_not_covered;
     session.screeningFinished = true;
     session.setState(STATES.CANDIDATE_QA);
-    return { instruction: 'Tell them that is everything from your side and ask whether they have any questions about the role or the company.' };
+    const options = interviewOptionsFrom(session.interviewProtocol);
+    return options.candidateQuestions
+      ? { instruction: aiStep('ai_steps.finish_screening.with_questions') }
+      : { instruction: aiStep('ai_steps.finish_screening.without_questions') };
   }
 
   async #escalate({ category, reason }, session) {
@@ -423,7 +623,7 @@ export class ToolExecutor {
     session.escalation = { category, reason };
     session.finish(TERMINAL.ESCALATED);
     return {
-      say_exactly: ESCALATION_LINES[category] ?? ESCALATION_LINES.other,
+      say_exactly: escalationLine(category),
       ended: true
     };
   }

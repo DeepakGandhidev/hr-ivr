@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useCopy } from "@/lib/copy-client";
 
 interface TeamMember {
   id: string;
@@ -53,6 +54,7 @@ function CheckIcon({ className = "h-4 w-4" }: { className?: string }) {
 }
 
 export default function TeamPage({ params }: { params: { tenant: string } }) {
+  const t = useCopy();
   const { tenant } = params;
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [email, setEmail] = useState("");
@@ -101,9 +103,9 @@ export default function TeamPage({ params }: { params: { tenant: string } }) {
         <div className="grid h-11 w-11 flex-none place-items-center rounded-2xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-hover)] text-white shadow-lg shadow-[var(--accent)]/25">
           <PeopleIcon />
         </div>
-        <h1 className="!mb-0">Team</h1>
+        <h1 className="!mb-0">{t("copy.portal.settings.team.title")}</h1>
       </div>
-      <p className="muted mb-6">Invite teammates and control what they can see and change.</p>
+      <p className="muted mb-6">{t("copy.portal.settings.team.intro")}</p>
 
       {error && (
         <div className="mb-5 rounded-xl border border-[var(--danger-border)] bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]">

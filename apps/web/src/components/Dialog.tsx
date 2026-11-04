@@ -35,6 +35,26 @@ export default function Dialog({
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !busyRef.current) onClose();
+      // Focus stays inside while it is open: Tab from the last control wraps
+      // to the first, Shift+Tab from the first to the last.
+      if (e.key === "Tab" && box.current) {
+        const focusable = Array.from(
+          box.current.querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        );
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const active = document.activeElement;
+        if (e.shiftKey && (active === first || active === box.current)) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && (active === last || !box.current.contains(active))) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => {

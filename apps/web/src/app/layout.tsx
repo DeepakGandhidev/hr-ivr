@@ -1,17 +1,30 @@
 import type { Metadata } from "next";
+import { settingText } from "@pratibha/shared/settings-runtime";
 import "./globals.css";
 import { THEME_SCRIPT } from "@/lib/theme";
+import SaarthiChat from "@/components/SaarthiChat";
+import { saarthiConfig } from "@/lib/saarthi";
 
-export const metadata: Metadata = {
-  title: "Pratibha — AI Hiring Agent",
-  description: "Screen and interview candidates automatically, from application to shortlist.",
-};
+/**
+ * From the admin panel (Brand, Product). Read per render on dynamic pages; a
+ * page Next prerenders at build time keeps the wording the build saw.
+ */
+export function generateMetadata(): Metadata {
+  return {
+    title: settingText("brand.site_title", "Pratibha — AI Hiring Agent"),
+    description: settingText(
+      "brand.site_description",
+      "Screen and interview candidates automatically, from application to shortlist."
+    ),
+  };
+}
 
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const saarthi = saarthiConfig();
   return (
     // suppressHydrationWarning: the script above sets data-theme on <html>
     // before hydration, so the server markup and the live DOM differ by that
@@ -30,7 +43,11 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        {/* Anonymous Saarthi chat on public pages; workspace pages run their own, signed in. */}
+        {saarthi.publicOn && <SaarthiChat siteKey={saarthi.siteKey} widgetUrl={saarthi.widgetUrl} publicOnly />}
+      </body>
     </html>
   );
 }

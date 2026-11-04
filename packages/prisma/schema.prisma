@@ -125,6 +125,76 @@ model PlatformSetting {
   @@map("platform_settings")
 }
 
+/// Every email Pratibha sends from its own mailbox: what, to whom, and how it
+/// went. `dedupeKey` makes a send idempotent (a quota warning goes once per
+/// period, a weekly summary once per week). Shown in the admin panel's Email
+/// page. Not tenant-scoped by RLS: written by the portal, the worker and the
+/// admin panel through their own roles, read only by the admin panel.
+model EmailLog {
+  id          String    @id @default(cuid())
+  kind        String
+  tenantId    String?   @map("tenant_id")
+  to          String
+  subject     String
+  status      String    @default("sending") // sending | sent | failed | skipped
+  error       String?
+  response    String?
+  dedupeKey   String?   @unique @map("dedupe_key")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  sentAt      DateTime? @map("sent_at")
+
+  @@index([createdAt])
+  @@index([kind, createdAt])
+  @@map("email_log")
+}
+
+/// Every WhatsApp message Pratibha sends through Meta's Cloud API, the same
+/// way email_log records email. `wamid` is Meta's message id: the webhook
+/// finds the row by it to record delivered, read or failed. Not tenant-scoped
+/// by RLS, like email_log.
+model WhatsappLog {
+  id        String    @id @default(cuid())
+  kind      String
+  tenantId  String?   @map("tenant_id")
+  toPhone   String    @map("to_phone")
+  template  String?
+  status    String    @default("sending") // sending | sent | delivered | read | failed | skipped
+  error     String?
+  wamid     String?   @unique
+  dedupeKey String?   @unique @map("dedupe_key")
+  createdAt DateTime  @default(now()) @map("created_at")
+  sentAt    DateTime? @map("sent_at")
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([createdAt])
+  @@index([kind, createdAt])
+  @@map("whatsapp_log")
+}
+
+/// Numbers that replied STOP to a WhatsApp message. Nothing is sent to them
+/// again, from any workspace, until they reply START. Platform-wide because
+/// the sender is Pratibha's one business number.
+model WhatsappOptout {
+  phoneE164 String   @id @map("phone_e164")
+  createdAt DateTime @default(now()) @map("created_at")
+  /// What opted them out, e.g. "reply: STOP".
+  source    String?
+
+  @@map("whatsapp_optouts")
+}
+
+/// What each running app (portal, worker) last reported using for every
+/// platform setting, so the admin panel can show values that come from a
+/// server's .env. Separate from platform_settings on purpose: the portal's
+/// role may write its own report here but stays read-only on the settings.
+model AppRuntimeReport {
+  app        String   @id
+  values     Json
+  reportedAt DateTime @default(now()) @updatedAt @map("reported_at")
+
+  @@map("app_runtime_reports")
+}
+
 model PlatformUser {
   id             String   @id @default(cuid())
   email          String   @unique
@@ -142,6 +212,8 @@ model PlatformUser {
 enum TenantStatus {
   trial
   active
+  /// Signed up, first month not yet paid: only the activation screen opens.
+  pending_payment
   past_due
   suspended
   deleted_pending
@@ -166,7 +238,13 @@ model CompanyProfile {
   legalName      String? @map("legal_name")
   /// Registered / billing address, free-form: Indian addresses do not fit
   /// fixed fields, and an invoice needs it as written.
+  /// The whole address as one block, composed from the parts below on every
+  /// save. Kept for readers that predate the structured fields.
   billingAddress String? @map("billing_address")
+  /// Structured registered address (Batch 8, CP20).
+  addressLine    String? @map("address_line")
+  city           String?
+  pinCode        String? @map("pin_code")
   /// State, which decides CGST+SGST versus IGST on an invoice. Held separately
   /// from the address because it is a calculation input, not decoration.
   billingState   String? @map("billing_state")
@@ -273,6 +351,13 @@ model Subscription {
   cancelRequestedAt DateTime? @map("cancel_requested_at")
   cancelReason      String?   @map("cancel_reason")
   cancelComment     String?   @map("cancel_comment")
+
+  /// The invoice for the next period while its AutoPay charge is in flight.
+  /// Set when the renewal job raises the charge and cleared when the charge
+  /// succeeds and the period rolls, so one period is never invoiced twice.
+  renewalInvoiceId String? @unique @map("renewal_invoice_id")
+  /// Mobile number for Cashfree: checkout and mandates both require one.
+  billingPhone     String? @map("billing_phone")
 
   /// Finance's address, deliberately not a portal login: an invoice should
   /// reach the person who pays without giving them the hiring data.
@@ -432,16 +517,21 @@ model Tenant {
 
   /// Who last moved `status`, and when: 'admin:<id>', 'system', or
   /// 'workspace:<userId>'.
-  statusChangedBy     String?       @map("status_changed_by")
-  statusChangedAt     DateTime?     @map("status_changed_at")
+  statusChangedBy        String?       @map("status_changed_by")
+  statusChangedAt        DateTime?     @map("status_changed_at")
   /// What Suspend or Delete moved the workspace away from, so Resume and
   /// Restore return it exactly as it was.
-  previousStatus      TenantStatus? @map("previous_status")
+  previousStatus         TenantStatus? @map("previous_status")
   /// The first admin's deletion request, waiting for a second admin.
-  deletionRequestedBy String?       @map("deletion_requested_by")
-  deletionRequestedAt DateTime?     @map("deletion_requested_at")
+  deletionRequestedBy    String?       @map("deletion_requested_by")
+  deletionRequestedAt    DateTime?     @map("deletion_requested_at")
   /// End of the 30 day hold. Erasure runs only after this.
-  deletionHoldUntil   DateTime?     @map("deletion_hold_until")
+  deletionHoldUntil      DateTime?     @map("deletion_hold_until")
+  /// Batch 7, PL10: auto screens matched arrivals; manual queues them.
+  screeningMode          ScreeningMode @default(manual) @map("screening_mode")
+  /// When the mode last changed. Auto mode only screens arrivals after this,
+  /// so switching to auto never retroactively screens the manual queue.
+  screeningModeChangedAt DateTime?     @map("screening_mode_changed_at")
 
   companyProfile CompanyProfile?
   assets         TenantAsset[]
@@ -497,6 +587,12 @@ model User {
   /// "on" - a notification type added later should reach people rather than be
   /// silently off for everyone who has ever saved preferences.
   notificationPrefs Json? @map("notification_prefs")
+
+  /// Mobile number for WhatsApp alerts (E.164), and whether they asked for
+  /// them. Both set in My profile; nothing is sent on WhatsApp without the
+  /// opt-in, and the email preferences above still decide which alerts.
+  phoneE164     String? @map("phone_e164")
+  whatsappOptIn Boolean @default(false) @map("whatsapp_opt_in")
 
   /// Two-factor authentication is deliberately NOT stored here. GoTrue owns it
   /// (auth.mfa_factors) and is the thing that actually gates a login; a second
@@ -562,6 +658,24 @@ model EmailConnection {
   uidValidity BigInt? @map("uid_validity")
   lastSeenUid BigInt? @map("last_seen_uid")
 
+  // --- OAuth (gmail, outlook) ---------------------------------------------
+  // Read over IMAP with XOAUTH2, so the same poller and IDLE watcher serve
+  // every pulled provider. Both tokens are AES-256-GCM sealed like imapSecret.
+  oauthRefreshSecret String?   @map("oauth_refresh_secret")
+  oauthAccessSecret  String?   @map("oauth_access_secret")
+  oauthExpiresAt     DateTime? @map("oauth_expires_at")
+
+  // --- Forwarding (forward_alias) -----------------------------------------
+  /// Local part of the private address mail is forwarded to, e.g.
+  /// "acme.k3x9q2m7wd" for acme.k3x9q2m7wd@in.pratibha.tech. Unguessable,
+  /// because anyone who knows it can file mail into this workspace.
+  forwardToken      String?   @unique @map("forward_token")
+  /// Gmail proves a forwarding address by mailing it a code; the receiver
+  /// stores it here so the settings page can show it to the user.
+  forwardVerifyCode String?   @map("forward_verify_code")
+  forwardVerifyUrl  String?   @map("forward_verify_url")
+  forwardVerifyAt   DateTime? @map("forward_verify_at")
+
   /// Where candidates from this mailbox are filed. With autoRoute off this is
   /// the destination; with it on this is the fallback for mail that matches no
   /// open job. Either way, null leaves the connection idle rather than
@@ -598,6 +712,10 @@ model Job {
   status             JobStatus @default(draft)
   location           String?
   salaryBand         String?   @map("salary_band")
+  /// Batch 6, I02: the band as numbers, annual rupees. The text above stays for
+  /// the JD; these drive the salary policy on calls. Null means no band set.
+  salaryMin          Int?      @map("salary_min")
+  salaryMax          Int?      @map("salary_max")
   experienceRange    String?   @map("experience_range")
   mustHaves          Json      @map("must_haves")
   goodToHaves        Json      @map("good_to_haves")
@@ -724,6 +842,20 @@ model JobPost {
 /// The first four are reached on their own as those events happen. The last
 /// three are judgements and are only ever set by a person - nothing in the
 /// system infers that someone was hired.
+/// Where a candidate's displayed name came from (Batch 7, PL90): the CV text
+/// first, the email sender's display name second, the subject line last.
+enum NameSource {
+  cv
+  sender
+  subject
+}
+
+/// Whether arrivals are screened as they come in, or queued for a person.
+enum ScreeningMode {
+  auto
+  manual
+}
+
 enum CandidateStatus {
   inbox
   screened
@@ -754,6 +886,18 @@ model Candidate {
   /// renders.
   status CandidateStatus @default(inbox)
 
+  /// Archived: hidden from every list, count, funnel and shortlist, kept and
+  /// restorable under the Archived filter. Not deletion.
+  archivedAt        DateTime?   @map("archived_at")
+  archivedBy        String?     @map("archived_by")
+  /// Never a candidate (junk mail). Hidden the same way, its own filter.
+  notApplicationAt  DateTime?   @map("not_application_at")
+  notApplicationBy  String?     @map("not_application_by")
+  nameSource        NameSource? @map("name_source")
+  /// Waiting for the screening runner (auto arrivals, Screen now, a move in
+  /// auto mode). Cleared when the screening lands. Shown as "Queued".
+  screeningQueuedAt DateTime?   @map("screening_queued_at")
+
   /// How this candidate reached this job: 'auto' (matched by the router),
   /// 'fallback' (matched nothing, filed in the mailbox's fallback job),
   /// 'fixed' (the mailbox files everything into one job), or 'manual' (a
@@ -763,6 +907,11 @@ model Candidate {
   /// Router score for an 'auto' match, so a confident hit is distinguishable
   /// from a marginal one when a recruiter reviews the pipeline.
   routingConfidence Int?     @map("routing_confidence")
+  /// The candidate asked for updates on WhatsApp (by replying START to
+  /// Pratibha's number). A reply of STOP clears it. With the admin panel's
+  /// "only message candidates who opted in" on, nobody else is messaged.
+  whatsappOptIn     Boolean   @default(false) @map("whatsapp_opt_in")
+  whatsappOptInAt   DateTime? @map("whatsapp_opt_in_at")
   createdAt         DateTime @default(now()) @map("created_at")
 
   tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -778,6 +927,7 @@ model Candidate {
   @@index([tenantId, jobId, email])
   // The candidates list filters and groups by status within a job.
   @@index([tenantId, jobId, status])
+  @@index([tenantId, archivedAt, notApplicationAt, createdAt])
   @@map("candidates")
 }
 
@@ -809,6 +959,10 @@ enum ScreeningVerdict {
 model Screening {
   id               String           @id @default(cuid())
   candidateId      String           @map("candidate_id")
+  /// The job this screening was run against. A candidate moved to another
+  /// role keeps the old screening in their history; the current one is the
+  /// one for their current job.
+  jobId            String?          @map("job_id")
   score            Int
   matchedMustHaves Json             @map("matched_must_haves")
   gaps             Json
@@ -823,6 +977,7 @@ model Screening {
 
   candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
+  @@index([candidateId, jobId])
   @@map("screenings")
 }
 
@@ -965,6 +1120,12 @@ enum InterviewDifficulty {
   expert
 }
 
+enum SalaryMismatchAction {
+  note
+  check
+  end
+}
+
 model InterviewProtocol {
   id              String  @id @default(cuid())
   tenantId        String  @map("tenant_id")
@@ -983,6 +1144,26 @@ model InterviewProtocol {
   /// Null falls back to the tenant name.
   agentName       String?             @map("agent_name")
   companyName     String?             @map("company_name")
+
+  /// Batch 6, I01: screeners Pratibha asks near the end of every call.
+  screenNotice        Boolean @default(true) @map("screen_notice")
+  screenSalary        Boolean @default(true) @map("screen_salary")
+  screenReasonLeaving Boolean @default(true) @map("screen_reason_leaving")
+  screenGaps          Boolean @default(true) @map("screen_gaps")
+  screenLocation      Boolean @default(false) @map("screen_location")
+  screenWorkMode      Boolean @default(false) @map("screen_work_mode")
+  screenTravel        Boolean @default(false) @map("screen_travel")
+  screenReference     Boolean @default(false) @map("screen_reference")
+  /// Salary policy. Pratibha never negotiates; these only decide what she says.
+  shareBand           Boolean              @default(true) @map("share_band")
+  mismatchAction      SalaryMismatchAction @default(check) @map("mismatch_action")
+  /// The conversation.
+  introduceRole       Boolean @default(true) @map("introduce_role")
+  candidateQuestions  Boolean @default(true) @map("candidate_questions")
+  hearBackDays        Int?    @default(3) @map("hear_back_days")
+  /// Up to three questions asked word for word. Enforced at the API.
+  customQuestions     Json    @default("[]") @map("custom_questions")
+
   version         Int
   updatedBy       String?             @map("updated_by")
   createdAt       DateTime            @default(now()) @map("created_at")
@@ -1039,6 +1220,13 @@ model InterviewCall {
   /// an invoice can be reconciled against the call that produced it, even if
   /// the rounding rule changes later.
   billableMinutes Int?      @map("billable_minutes")
+
+  /// Batch 6, I20: screener answers as fields - noticePeriod, currentCtc,
+  /// expectedCtc (rupees a year), reasonForLeaving, location, workMode, travel,
+  /// referenceName, referencePhone, referenceRelation, bandAnswer.
+  practicalDetails Json?   @map("practical_details")
+  /// I12: expected CTC came in above the role's band maximum.
+  salaryMismatch   Boolean @default(false) @map("salary_mismatch")
 
   telephonyCost Float?   @map("telephony_cost")
   llmCostUsd    Float?   @map("llm_cost_usd")
@@ -1388,4 +1576,84 @@ model BlockedNumber {
 
   @@index([phoneE164])
   @@map("blocked_numbers")
+}
+
+/// Batch 5 (P01, P16). One row per GoTrue session, written once when a real
+/// browser signs in. GoTrue's own auth.sessions.user_agent is overwritten by
+/// every server-side token refresh, so the device and place a person signed in
+/// from are kept here instead. Location comes from a local database at sign in
+/// and is never looked up per page view.
+model SessionOrigin {
+  sessionId String   @id @map("session_id") @db.Uuid
+  userId    String   @map("user_id")
+  userAgent String?  @map("user_agent")
+  ip        String?
+  city      String?
+  country   String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("session_origins")
+}
+
+/// A one-time Cashfree checkout in flight: a top-up or a plan upgrade, paid
+/// now rather than against the mandate. What it buys is applied only when
+/// Cashfree reports the order paid, so an abandoned checkout grants nothing.
+/// Read and written through the admin connection only.
+model CheckoutOrder {
+  id        String    @id @default(cuid())
+  tenantId  String    @map("tenant_id")
+  invoiceId String    @unique @map("invoice_id")
+  /// Cashfree's order_id; ours, unique per attempt.
+  orderId   String    @unique @map("order_id")
+  /// top_up | plan_change
+  purpose   String
+  packId    String?   @map("pack_id")
+  planId    String?   @map("plan_id")
+  /// pending | paid | failed
+  status    String    @default("pending")
+  createdAt DateTime  @default(now()) @map("created_at")
+  paidAt    DateTime? @map("paid_at")
+
+  @@index([tenantId, createdAt])
+  @@map("checkout_orders")
+}
+
+/// Marketing site content the admin panel edits (Website): page SEO, blog
+/// posts, testimonials, FAQ items and company details, one row per item.
+/// `draft` is what the panel shows and edits; `live` is what the site was last
+/// built from. Publishing copies draft to live for every row (a null draft
+/// means "remove on publish") and rebuilds pratibha.tech.
+model SiteEntry {
+  id          String    @id @default(cuid())
+  /// page | company | testimonial | faq | post
+  kind        String
+  /// Page key, "company", or the item's own id.
+  key         String
+  position    Int       @default(0)
+  draft       Json?
+  live        Json?
+  updatedBy   String?   @map("updated_by")
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+  publishedAt DateTime? @map("published_at")
+
+  @@unique([kind, key])
+  @@map("site_entries")
+}
+
+/// One Publish of the marketing site: the content it was built from and how
+/// the build went. The newest `live` row is what pratibha.tech shows.
+model SitePublish {
+  id          String    @id @default(cuid())
+  /// building | live | failed
+  status      String
+  content     Json
+  changes     Int       @default(0)
+  log         String?
+  startedBy   String?   @map("started_by")
+  startedAt   DateTime  @default(now()) @map("started_at")
+  finishedAt  DateTime? @map("finished_at")
+
+  @@index([startedAt])
+  @@map("site_publishes")
 }

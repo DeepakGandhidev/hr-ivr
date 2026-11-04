@@ -10,6 +10,7 @@ import {
 import { authorizeTenant, withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { deleteAsset } from "@/lib/storage";
+import { normalizePhoneE164 } from "@pratibha/worker/src/ingestion/parser.js";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -19,6 +20,9 @@ const profileSchema = z.object({
   timezone: z.enum(TIMEZONES).nullable().optional(),
   photoAssetId: z.string().trim().nullable().optional(),
   notificationPrefs: z.record(z.boolean()).optional(),
+  /** Mobile number for WhatsApp alerts, as typed; empty or null removes it. */
+  phone: z.string().trim().max(40).nullable().optional(),
+  whatsappOptIn: z.boolean().optional(),
 });
 
 /**
@@ -49,6 +53,8 @@ export async function GET(
           timezone: true,
           photoAssetId: true,
           notificationPrefs: true,
+          phoneE164: true,
+          whatsappOptIn: true,
           createdAt: true,
         },
       });
@@ -76,6 +82,18 @@ export async function PATCH(
     const { ctx, tx } = await authorizeTenant(tenant, Action.candidateRead);
     const data = parsed.data;
 
+    // The same normaliser as candidate numbers (a 10-digit Indian mobile gets
+    // +91), so a number reads the same everywhere it is shown.
+    let phoneE164: string | null | undefined;
+    if (data.phone !== undefined) {
+      phoneE164 = data.phone ? normalizePhoneE164(data.phone) : null;
+      if (data.phone && !phoneE164) {
+        throw new ValidationError(
+          `"${data.phone}" is not a mobile number we can message. Use a 10-digit Indian mobile or a number with its country code.`
+        );
+      }
+    }
+
     return tx(async (db) => {
       if (data.photoAssetId) {
         // Checked, not trusted: otherwise any asset id — including another
@@ -91,8 +109,16 @@ export async function PATCH(
 
       const before = await db.user.findUnique({
         where: { id: ctx.user.id },
-        select: { name: true, timezone: true, photoAssetId: true, notificationPrefs: true },
+        select: { name: true, timezone: true, photoAssetId: true, notificationPrefs: true, phoneE164: true, whatsappOptIn: true },
       });
+
+      // Alerts need somewhere to go: no number, no opt-in.
+      const nextPhone = phoneE164 !== undefined ? phoneE164 : (before?.phoneE164 ?? null);
+      if (data.whatsappOptIn && !nextPhone) {
+        throw new ValidationError("Add your mobile number before turning on WhatsApp alerts.");
+      }
+      // Removing the number turns the alerts off with it.
+      const whatsappOptIn = phoneE164 === null ? false : data.whatsappOptIn;
 
       const user = await db.user.update({
         where: { id: ctx.user.id },
@@ -105,6 +131,8 @@ export async function PATCH(
           ...(data.notificationPrefs !== undefined && {
             notificationPrefs: sanitiseNotificationPrefs(data.notificationPrefs),
           }),
+          ...(phoneE164 !== undefined && { phoneE164 }),
+          ...(whatsappOptIn !== undefined && { whatsappOptIn }),
         },
         select: {
           id: true,
@@ -113,6 +141,8 @@ export async function PATCH(
           timezone: true,
           photoAssetId: true,
           notificationPrefs: true,
+          phoneE164: true,
+          whatsappOptIn: true,
         },
       });
 
@@ -138,6 +168,8 @@ export async function PATCH(
           timezone: user.timezone,
           photoAssetId: user.photoAssetId,
           notificationPrefs: user.notificationPrefs,
+          phoneE164: user.phoneE164,
+          whatsappOptIn: user.whatsappOptIn,
         },
       });
 

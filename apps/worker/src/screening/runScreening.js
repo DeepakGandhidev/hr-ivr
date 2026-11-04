@@ -1,5 +1,6 @@
 import { prisma, withTenant } from '@pratibha/prisma';
 import { TRIAL_LIMITS, advanceCandidateStatus } from '@pratibha/shared';
+import { setting } from '@pratibha/shared/settings-runtime';
 import { LlmProvider } from './provider.js';
 import { getOrCreateUsageMeter, incrementScreeningUsage } from '../db/index.js';
 import { isTenantPaused } from '../lib/tenantStatus.js';
@@ -124,8 +125,8 @@ export async function runScreening(candidateId, config, logger = console) {
   const result = await provider.complete({
     system,
     messages: [{ role: 'user', content: 'Screen this candidate and return JSON only.' }],
-    maxTokens: 1024,
-    temperature: 0.2,
+    maxTokens: setting('ai.screening_max_tokens'),
+    temperature: setting('ai.screening_temperature'),
   });
 
   const parsed = result.content

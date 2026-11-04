@@ -103,6 +103,14 @@ export async function PATCH(
 
       const data: z.infer<typeof updateJobSchema> = parsed.data;
 
+      // I02: the band the salary policy compares against. Both ends are
+      // annual rupees; a band with its ends swapped would flag every answer.
+      const nextMin = data.salaryMin !== undefined ? data.salaryMin : existing.salaryMin;
+      const nextMax = data.salaryMax !== undefined ? data.salaryMax : existing.salaryMax;
+      if (nextMin && nextMax && nextMin > nextMax) {
+        throw new ValidationError("The band minimum is above the maximum.", { salaryMin: nextMin, salaryMax: nextMax });
+      }
+
       // Snapshot BEFORE the write, so the version records what the role was
       // when its existing candidates were screened against it. Taken after the
       // update it would just duplicate the new state and prove nothing.
@@ -165,6 +173,8 @@ export async function PATCH(
           ...(data.title !== undefined && { title: data.title }),
           ...(data.location !== undefined && { location: data.location }),
           ...(data.salaryBand !== undefined && { salaryBand: data.salaryBand }),
+          ...(data.salaryMin !== undefined && { salaryMin: data.salaryMin }),
+          ...(data.salaryMax !== undefined && { salaryMax: data.salaryMax }),
           ...(data.experienceRange !== undefined && { experienceRange: data.experienceRange }),
           ...(data.mustHaves !== undefined && { mustHaves: data.mustHaves }),
           ...(data.goodToHaves !== undefined && { goodToHaves: data.goodToHaves }),

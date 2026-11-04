@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Time from "@/components/Time";
+import { useCopy } from "@/lib/copy-client";
 import Transcript, { type TranscriptTurn } from "@/components/Transcript";
 
 interface Call {
@@ -53,6 +54,7 @@ const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 
 export default function CallsPage({ params }: { params: { tenant: string } }) {
   const { tenant } = params;
+  const t = useCopy();
 
   // Last 7 days by default — the acceptance criterion for this page is
   // opening it and filtering to a week, so that is where it opens.
@@ -125,8 +127,8 @@ export default function CallsPage({ params }: { params: { tenant: string } }) {
     <div className="dash" style={{ maxWidth: 1100 }}>
       <div className="dash-top">
         <div>
-          <h1>Calls</h1>
-          <p className="sub">Every call Pratibha has taken — including the ones that did not work.</p>
+          <h1>{t("copy.portal.calls.title")}</h1>
+          <p className="sub">{t("copy.portal.calls.intro")}</p>
         </div>
         {data && (
           <div className="row" style={{ gap: 24 }}>
@@ -181,16 +183,14 @@ export default function CallsPage({ params }: { params: { tenant: string } }) {
       {/* Stated rather than silently omitted: a page whose whole purpose is
           spotting problems must not hide a category of call it cannot show. */}
       <div className="notice notice-info" style={{ marginBottom: 16 }}>
-        Callers we could not recognise are not listed here. Pratibha answers on one number
-        shared by every workspace, so an unmatched call cannot be attributed to a tenant —
-        those are recorded on the platform log instead.
+        {t("copy.portal.calls.unmatched_notice")}
       </div>
 
       <div className="card">
         {loading && !data ? (
           <p className="muted">Loading…</p>
         ) : !data || data.calls.length === 0 ? (
-          <p className="muted">No calls in this period.</p>
+          <p className="muted">{t("copy.portal.calls.empty")}</p>
         ) : (
           <div className="table-wrap">
             <table>
@@ -244,7 +244,7 @@ export default function CallsPage({ params }: { params: { tenant: string } }) {
         )}
         {data?.totals.truncated && (
           <p className="muted" style={{ marginTop: 12 }}>
-            Showing the most recent 500 calls. Narrow the date range to see earlier ones.
+            {t("copy.portal.calls.truncated")}
           </p>
         )}
       </div>

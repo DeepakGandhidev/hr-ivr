@@ -8,8 +8,10 @@ import type { AdminRole } from "@pratibha/prisma";
  * endpoint is refused there, whatever the page did or did not render.
  *
  *   Owner     everything.
- *   Engineer  sees everything and edits Platform settings, but cannot publish
- *             pricing, delete workspaces or manage admins.
+ *   Engineer  sees everything, edits Platform settings and AI prompts, but
+ *             cannot publish pricing, delete workspaces, manage admins, or
+ *             change Owner-only settings (API keys, billing, security).
+ *   Owner and Engineer both edit and publish the website (Website).
  *   Support   can view, Sign in as with a reason, and grant goodwill minutes up
  *             to the configured cap. Nothing else.
  */
@@ -23,6 +25,7 @@ export const PERMISSIONS = [
   "workspace.suspend",
   "workspace.delete",
   "workspace.members",
+  "workspace.edit",
   "pricing.edit",
   "pricing.publish",
   "coupons.manage",
@@ -31,12 +34,16 @@ export const PERMISSIONS = [
   "payments.export",
   "calls.block",
   "settings.edit",
+  "settings.owner",
+  "prompts.edit",
   "team.manage",
+  "website.edit",
+  "website.publish",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
 
-const ENGINEER_DENIED: Permission[] = ["pricing.publish", "workspace.delete", "team.manage"];
+const ENGINEER_DENIED: Permission[] = ["pricing.publish", "workspace.delete", "team.manage", "settings.owner"];
 const SUPPORT_ALLOWED: Permission[] = ["view", "workspace.sign_in_as", "workspace.grant_goodwill"];
 
 export function can(role: AdminRole, permission: Permission): boolean {
@@ -82,6 +89,15 @@ export function refusalReason(role: AdminRole, permission: Permission): string {
       return `${who} cannot manage admins. Only an Owner can.`;
     case "settings.edit":
       return `${who} cannot change Platform settings. Only an Owner or Engineer can.`;
+    case "workspace.edit":
+      return `${who} cannot edit workspace details. Only an Owner or Engineer can.`;
+    case "settings.owner":
+      return `${who} cannot change API keys, billing or security settings. Only an Owner can.`;
+    case "website.edit":
+    case "website.publish":
+      return `${who} cannot change the website. Only an Owner or Engineer can.`;
+    case "prompts.edit":
+      return `${who} cannot change AI prompts. Only an Owner or Engineer can.`;
     default:
       return `${who} cannot do this. Support can view, sign in as a workspace with a reason, and grant goodwill minutes up to the cap.`;
   }

@@ -4,12 +4,14 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import ThemeToggle from "@/components/ThemeToggle";
+import { useCopy } from "@/lib/copy-client";
 
 interface TenantNavProps {
   tenant: string;
   /**
    * Optional live counts shown as a saffron badge next to a nav link, keyed
-   * by the link's label — e.g. { Roles: 6, Shortlists: 3 }. Pass real numbers
+   * by the link's built-in label (its id, which panel wording does not
+   * change) — e.g. { Jobs: 6, Pipeline: 3 }. Pass real numbers
    * from wherever the page already fetches them; omit a key to hide its badge.
    */
   badges?: Record<string, number>;
@@ -34,32 +36,33 @@ interface TenantNavProps {
  * globals.css instead of forking the palette.
  */
 export function TenantNav({ tenant, badges }: TenantNavProps) {
+  const t = useCopy();
   const pathname = usePathname() ?? "";
 
   const groups = [
     {
-      label: "Hiring",
+      label: t("copy.portal.nav.group_hiring"),
       links: [
-        { href: `/${tenant}`, label: "Overview", exact: true },
-        { href: `/${tenant}/jobs`, label: "Jobs" },
-        { href: `/${tenant}/pipeline`, label: "Pipeline" },
-        { href: `/${tenant}/calls`, label: "Calls" },
+        { href: `/${tenant}`, id: "Overview", label: t("copy.portal.nav.overview"), exact: true },
+        { href: `/${tenant}/jobs`, id: "Jobs", label: t("copy.portal.nav.jobs") },
+        { href: `/${tenant}/pipeline`, id: "Pipeline", label: t("copy.portal.nav.pipeline") },
+        { href: `/${tenant}/calls`, id: "Calls", label: t("copy.portal.nav.calls") },
       ],
     },
     {
-      label: "Settings",
+      label: t("copy.portal.nav.group_settings"),
       links: [
         // Company first: it is the workspace's own identity, and the section
         // most people look for when they arrive here.
-        { href: `/${tenant}/settings/company`, label: "Company profile" },
+        { href: `/${tenant}/settings/company`, id: "Company profile", label: t("copy.portal.nav.company") },
         // Replaces "Plan & usage": one section, with the meter leading it.
-        { href: `/${tenant}/settings/subscription`, label: "Subscription" },
-        { href: `/${tenant}/settings/profile`, label: "My profile" },
-        { href: `/${tenant}/settings/email`, label: "Email" },
-        { href: `/${tenant}/settings/team`, label: "Team" },
-        { href: `/${tenant}/settings/templates`, label: "Templates" },
-        { href: `/${tenant}/settings/call-windows`, label: "Call windows" },
-        { href: `/${tenant}/settings/protocols`, label: "Interview" },
+        { href: `/${tenant}/settings/subscription`, id: "Subscription", label: t("copy.portal.nav.subscription") },
+        { href: `/${tenant}/settings/profile`, id: "My profile", label: t("copy.portal.nav.profile") },
+        { href: `/${tenant}/settings/email`, id: "Email", label: t("copy.portal.nav.email") },
+        { href: `/${tenant}/settings/team`, id: "Team", label: t("copy.portal.nav.team") },
+        { href: `/${tenant}/settings/templates`, id: "Templates", label: t("copy.portal.nav.templates") },
+        { href: `/${tenant}/settings/call-windows`, id: "Call windows", label: t("copy.portal.nav.call_windows") },
+        { href: `/${tenant}/settings/protocols`, id: "Interview", label: t("copy.portal.nav.interview") },
       ],
     },
   ];
@@ -83,7 +86,7 @@ export function TenantNav({ tenant, badges }: TenantNavProps) {
       </Link>
 
       {groups.map((group) => (
-        <div key={group.label}>
+        <div key={group.links[0].href}>
           <div className="px-2 pb-1.5 pt-3.5 text-[11px] font-semibold uppercase tracking-wide text-white/40">
             {group.label}
           </div>
@@ -102,9 +105,9 @@ export function TenantNav({ tenant, badges }: TenantNavProps) {
                 ].join(" ")}
               >
                 <span>{link.label}</span>
-                {badges?.[link.label] ? (
+                {badges?.[link.id] ? (
                   <span className="inline-flex h-[19px] min-w-[19px] flex-none items-center justify-center rounded-full bg-[var(--saffron)] px-1.5 text-[11px] font-bold leading-none text-[var(--indigo)]">
-                    {badges[link.label]}
+                    {badges[link.id]}
                   </span>
                 ) : null}
               </Link>
@@ -121,8 +124,8 @@ export function TenantNav({ tenant, badges }: TenantNavProps) {
       >
         <span className="mt-[5px] h-2 w-2 flex-none rounded-full bg-[var(--saffron)]" />
         <span>
-          <b className="block text-[13.5px] font-semibold">Ask Saarthi</b>
-          <span className="mt-px block text-xs text-white/60">Product help, any time</span>
+          <b className="block text-[13.5px] font-semibold">{t("copy.portal.nav.help_title")}</b>
+          <span className="mt-px block text-xs text-white/60">{t("copy.portal.nav.help_sub")}</span>
         </span>
       </button>
 

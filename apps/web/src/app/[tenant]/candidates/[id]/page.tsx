@@ -7,6 +7,8 @@ import { CandidateStatusBadge, CandidateStatusPicker } from "@/components/Candid
 import Markdown from "@/components/Markdown";
 import { recommendationChip, verdictLabel } from "@/components/JobShell";
 import { formatDate, formatDateTime } from "@/lib/format";
+import PracticalDetails, { hasPracticalDetails, type PracticalDetailsData } from "@/components/PracticalDetails";
+import { useCopy } from "@/lib/copy-client";
 
 /**
  * Everything about one candidate, on one screen.
@@ -57,6 +59,8 @@ interface Call {
   language: string | null;
   transcriptRef: string | null;
   recordingRef: string | null;
+  practicalDetails?: PracticalDetailsData | null;
+  salaryMismatch?: boolean;
   assessmentReport: Report | null;
 }
 
@@ -94,6 +98,7 @@ function duration(start: string, end: string | null) {
 
 /** The stage the candidate has actually reached, derived from the rows. */
 export default function CandidatePage({ params }: { params: { tenant: string; id: string } }) {
+  const t = useCopy();
   const { tenant, id } = params;
   const [candidate, setCandidate] = useState<Candidate | null>(null);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
@@ -125,6 +130,8 @@ export default function CandidatePage({ params }: { params: { tenant: string; id
 
   const latest = candidate.screenings[0];
   const report = candidate.interviewCalls.find((c) => c.assessmentReport)?.assessmentReport ?? null;
+  // I20: the latest call that collected screener answers.
+  const practical = candidate.interviewCalls.find((c) => hasPracticalDetails(c.practicalDetails))?.practicalDetails ?? null;
 
   return (
     <div className="dash" style={{ maxWidth: 980 }}>
@@ -183,9 +190,9 @@ export default function CandidatePage({ params }: { params: { tenant: string; id
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
-        <h2>Screening {candidate.screenings.length > 1 ? `(${candidate.screenings.length})` : ""}</h2>
+        <h2>{t("copy.portal.candidate.screening_heading")} {candidate.screenings.length > 1 ? `(${candidate.screenings.length})` : ""}</h2>
         {candidate.screenings.length === 0 ? (
-          <p className="muted">Not screened yet.</p>
+          <p className="muted">{t("copy.portal.candidate.not_screened")}</p>
         ) : (
           <div className="stack" style={{ gap: 16 }}>
             {candidate.screenings.map((s) => (
@@ -223,9 +230,9 @@ export default function CandidatePage({ params }: { params: { tenant: string; id
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
-        <h2>Call history</h2>
+        <h2>{t("copy.portal.candidate.calls_heading")}</h2>
         {candidate.interviewCalls.length === 0 ? (
-          <p className="muted">This candidate has not called yet.</p>
+          <p className="muted">{t("copy.portal.candidate.no_calls")}</p>
         ) : (
           <div className="table-wrap">
             <table>
@@ -262,7 +269,7 @@ export default function CandidatePage({ params }: { params: { tenant: string; id
       {report && (
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="sec-h">
-            <h2 style={{ margin: 0 }}>Interview report</h2>
+            <h2 style={{ margin: 0 }}>{t("copy.portal.candidate.report_heading")}</h2>
             <span className="subtle">{formatDateTime(report.generatedAt)}</span>
           </div>
           <div className="row" style={{ gap: 14, alignItems: "baseline" }}>
@@ -290,10 +297,16 @@ export default function CandidatePage({ params }: { params: { tenant: string; id
         </div>
       )}
 
+      {practical && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <PracticalDetails details={practical} />
+        </div>
+      )}
+
       <Notes tenant={tenant} candidateId={id} notes={candidate.notes} meId={me} onChanged={load} />
 
       <div className="card" style={{ marginTop: 16 }}>
-        <h2>Timeline</h2>
+        <h2>{t("copy.portal.candidate.timeline_heading")}</h2>
         <div className="feed">
           {timeline.map((e, i) => (
             <div className="ev" key={`${e.at}-${i}`}>
@@ -364,6 +377,7 @@ function Notes({
   meId: string | null;
   onChanged: () => void;
 }) {
+  const t = useCopy();
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
@@ -392,7 +406,7 @@ function Notes({
 
   return (
     <div className="card">
-      <h2>Notes</h2>
+      <h2>{t("copy.portal.candidate.notes_heading")}</h2>
 
       <div className="stack" style={{ gap: 8, marginBottom: 16 }}>
         <textarea
@@ -420,7 +434,7 @@ function Notes({
       {error && <div className="notice notice-error">{error}</div>}
 
       {notes.length === 0 ? (
-        <p className="muted">No notes yet.</p>
+        <p className="muted">{t("copy.portal.candidate.no_notes")}</p>
       ) : (
         <div className="stack" style={{ gap: 14 }}>
           {notes.map((note) => (

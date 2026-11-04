@@ -1,4 +1,7 @@
 import { prisma } from '@pratibha/prisma';
+import { planFeatureFromRow } from '@pratibha/shared';
+import { OAuthRevokedError } from '@pratibha/shared/mail-oauth';
+import { setting } from '@pratibha/shared/settings-runtime';
 
 import { fetchNewMessages, watchMailbox } from './imapClient.js';
 import { createCandidateFromEmail } from './createCandidate.js';
@@ -17,12 +20,13 @@ const TEN_MINUTES_MS = 10 * 60 * 1000;
 //
 // Held in memory rather than on the row: this needs no migration, and a worker
 // restart resetting the backoff is acceptable because a restart is rare and
-// deliberate. The cap matters more than the curve - after ROLL_OFF consecutive
-// failures the mailbox is left alone entirely until someone fixes it and the
-// settings panel re-tests the connection.
+// deliberate. The cap matters more than the curve - after `email.failure_rolloff`
+// consecutive failures (12 by default) the mailbox is left alone entirely until
+// someone fixes it and the settings panel re-tests the connection.
 const BACKOFF_BASE_MS = 5 * 60 * 1000;
 const BACKOFF_CAP_MS = 6 * 60 * 60 * 1000;
-const ROLL_OFF_AFTER = 12;
+
+const rollOffAfter = () => setting('email.failure_rolloff');
 
 const failures = new Map();
 
@@ -34,7 +38,7 @@ function backoffFor(attempts) {
 function inBackoff(connectionId, now = Date.now()) {
   const record = failures.get(connectionId);
   if (!record) return false;
-  if (record.attempts >= ROLL_OFF_AFTER) return true;
+  if (record.attempts >= rollOffAfter()) return true;
   return now < record.nextAttemptAt;
 }
 
@@ -55,11 +59,11 @@ export function __resetBackoff() {
 }
 
 /**
- * Providers this worker can actually fetch from. `forward_alias` mail arrives
- * by webhook rather than being pulled, and gmail/outlook still need their OAuth
- * token exchange, so neither is polled here.
+ * Providers this worker fetches from over IMAP: a password for 'imap', an
+ * OAuth access token for gmail/outlook. `forward_alias` mail is pushed to the
+ * inbound SMTP receiver instead, so it is never polled.
  */
-const PULL_PROVIDERS = new Set(['imap']);
+export const PULL_PROVIDERS = new Set(['imap', 'gmail', 'outlook']);
 
 function toBigInt(value) {
   if (value === null || value === undefined) return null;
@@ -74,7 +78,104 @@ function ingestibleConnection(connection) {
   if (!PULL_PROVIDERS.has(connection.provider)) return false;
   // Without a destination job an ingested CV has nowhere to go. Idling is the
   // honest behaviour; inventing a job would attach candidates to the wrong role.
-  return Boolean(connection.defaultJobId && connection.imapHost && connection.imapSecret);
+  const credential = connection.provider === 'imap' ? connection.imapSecret : connection.oauthRefreshSecret;
+  return Boolean(connection.defaultJobId && connection.imapHost && credential);
+}
+
+/** Jobs auto-routing may choose from; empty when the mailbox files into one job. */
+export async function loadOpenJobs(connection, logger = console) {
+  if (!connection.autoRoute) return [];
+
+  // A plan can take auto-routing away after a mailbox turned it on. With no
+  // jobs to choose from, every message goes to the fallback job, which is
+  // exactly what a one-job mailbox does.
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: connection.tenantId },
+    select: { plan: { select: { key: true, features: true } } },
+  });
+  if (tenant && planFeatureFromRow(tenant.plan, 'auto_route_mailboxes') === false) {
+    logger.info?.({ connectionId: connection.id }, 'Plan does not include auto-routing; filing into the fallback job');
+    return [];
+  }
+
+  const openJobs = await prisma.job.findMany({
+    where: { tenantId: connection.tenantId, status: 'open' },
+    select: { id: true, title: true, slug: true },
+  });
+  if (openJobs.length === 0) {
+    logger.warn?.(
+      { connectionId: connection.id },
+      'Auto-routing is on but no jobs are open; everything will go to the fallback job'
+    );
+  }
+  return openJobs;
+}
+
+/**
+ * Turn one message into a candidate, or decide it is not an application.
+ * Shared by the IMAP poller and the forwarding receiver so a mailbox behaves
+ * the same however its mail reaches us.
+ *
+ * @returns {Promise<'ingested'|'skipped'>} Throws when the write failed and the
+ *   message must be retried.
+ */
+export async function ingestMessage(connection, message, openJobs, logger = console) {
+  // Mail from the mailbox owner is almost always a forward, a reply, or an
+  // auto-response, not an application.
+  if (message.from && message.from.toLowerCase() === String(connection.address).toLowerCase()) {
+    return 'skipped';
+  }
+
+  // Most mail in a real inbox is not an application. Importing it anyway
+  // fills the pipeline with newsletters and notifications, which a recruiter
+  // then has to clear out by hand.
+  const verdict = classifyMessage(message);
+  if (!verdict.accept) {
+    logger.debug?.(
+      { connectionId: connection.id, uid: message.uid, from: message.from, reason: verdict.reason },
+      'Skipping message: not an application'
+    );
+    return 'skipped';
+  }
+
+  // Decide the destination before writing. An unmatched application goes to
+  // the fallback job rather than being dropped, so a recruiter still sees it.
+  let jobId = connection.defaultJobId;
+  let routedBy = 'fixed';
+  let routingConfidence = null;
+
+  if (connection.autoRoute) {
+    const match = matchJobFromMessage(message, openJobs);
+    if (match.jobId) {
+      jobId = match.jobId;
+      routedBy = 'auto';
+      routingConfidence = match.confidence;
+      logger.info?.(
+        { connectionId: connection.id, uid: message.uid, job: match.matchedTitle, confidence: match.confidence },
+        'Routed application to job'
+      );
+    } else {
+      routedBy = 'fallback';
+      logger.info?.(
+        { connectionId: connection.id, uid: message.uid, subject: message.subject, runnerUp: match.runnerUp },
+        'No confident job match; using the fallback job'
+      );
+    }
+  }
+
+  await createCandidateFromEmail(connection.tenantId, {
+    jobId,
+    routedBy,
+    routingConfidence,
+    sourceEmailMsgId: message.messageId,
+    from: message.from,
+    fromName: message.fromName,
+    subject: message.subject,
+    emailBody: message.text,
+    cvBuffer: message.cvAttachment?.content ?? null,
+    cvFilename: message.cvAttachment?.filename ?? '',
+  });
+  return 'ingested';
 }
 
 /**
@@ -92,19 +193,7 @@ export async function pollConnection(connection, logger = console) {
   // With auto-routing on, one mailbox serves every open role. Jobs are loaded
   // once per poll rather than per message: a mailbox delivering 50 applications
   // would otherwise run 50 identical queries.
-  const openJobs = connection.autoRoute
-    ? await prisma.job.findMany({
-        where: { tenantId: connection.tenantId, status: 'open' },
-        select: { id: true, title: true, slug: true },
-      })
-    : [];
-
-  if (connection.autoRoute && openJobs.length === 0) {
-    logger.warn?.(
-      { connectionId: connection.id },
-      'Auto-routing is on but no jobs are open; everything will go to the fallback job'
-    );
-  }
+  const openJobs = await loadOpenJobs(connection, logger);
 
   let ingested = 0;
   let skipped = 0;
@@ -119,67 +208,10 @@ export async function pollConnection(connection, logger = console) {
   let blocked = false;
 
   for (const message of messages) {
-    // Mail from the mailbox owner is almost always a forward, a reply, or an
-    // auto-response, not an application.
-    if (message.from && message.from.toLowerCase() === String(connection.address).toLowerCase()) {
-      skipped += 1;
-      if (!blocked) committedUid = toBigInt(message.uid) ?? committedUid;
-      continue;
-    }
-
-    // Most mail in a real inbox is not an application. Importing it anyway
-    // fills the pipeline with newsletters and notifications, which a recruiter
-    // then has to clear out by hand.
-    const verdict = classifyMessage(message);
-    if (!verdict.accept) {
-      logger.debug?.(
-        { connectionId: connection.id, uid: message.uid, from: message.from, reason: verdict.reason },
-        'Skipping message: not an application'
-      );
-      skipped += 1;
-      if (!blocked) committedUid = toBigInt(message.uid) ?? committedUid;
-      continue;
-    }
-
-    // Decide the destination before writing. An unmatched application goes to
-    // the fallback job rather than being dropped, so a recruiter still sees it.
-    let jobId = connection.defaultJobId;
-    let routedBy = 'fixed';
-    let routingConfidence = null;
-
-    if (connection.autoRoute) {
-      const match = matchJobFromMessage(message, openJobs);
-      if (match.jobId) {
-        jobId = match.jobId;
-        routedBy = 'auto';
-        routingConfidence = match.confidence;
-        logger.info?.(
-          { connectionId: connection.id, uid: message.uid, job: match.matchedTitle, confidence: match.confidence },
-          'Routed application to job'
-        );
-      } else {
-        routedBy = 'fallback';
-        logger.info?.(
-          { connectionId: connection.id, uid: message.uid, subject: message.subject, runnerUp: match.runnerUp },
-          'No confident job match; using the fallback job'
-        );
-      }
-    }
-
     try {
-      await createCandidateFromEmail(connection.tenantId, {
-        jobId,
-        routedBy,
-        routingConfidence,
-        sourceEmailMsgId: message.messageId,
-        from: message.from,
-        fromName: message.fromName,
-        subject: message.subject,
-        emailBody: message.text,
-        cvBuffer: message.cvAttachment?.content ?? null,
-        cvFilename: message.cvAttachment?.filename ?? '',
-      });
-      ingested += 1;
+      const outcome = await ingestMessage(connection, message, openJobs, logger);
+      if (outcome === 'ingested') ingested += 1;
+      else skipped += 1;
       if (!blocked) committedUid = toBigInt(message.uid) ?? committedUid;
     } catch (err) {
       // Everything from here on stays unacknowledged until this one succeeds,
@@ -236,7 +268,7 @@ export async function pollAllConnections(logger = console) {
       logger.info?.({ connectionId: connection.id, address: connection.address, ...result }, 'Mailbox polled');
     } catch (err) {
       const { attempts, nextAttemptAt } = recordFailure(connection.id);
-      const rolledOff = attempts >= ROLL_OFF_AFTER;
+      const rolledOff = attempts >= rollOffAfter();
 
       logger.error?.({
         connectionId: connection.id,
@@ -248,6 +280,10 @@ export async function pollAllConnections(logger = console) {
       }, rolledOff
         ? 'Poll failed; giving up on this mailbox until it is reconnected'
         : 'Poll failed');
+
+      // A revoked sign-in has already paused the row with its own message;
+      // overwriting that with 'error' would put it back in the retry loop.
+      if (err instanceof OAuthRevokedError) continue;
 
       await prisma.emailConnection.update({
         where: { id: connection.id },
@@ -272,7 +308,7 @@ export function startPoller(logger = console, intervalMs = TEN_MINUTES_MS) {
 
   const syncWatchers = async () => {
     const connections = await prisma.emailConnection.findMany({
-      where: { provider: 'imap', status: { not: 'revoked' } },
+      where: { provider: { in: [...PULL_PROVIDERS] }, status: { not: 'revoked' } },
     });
 
     const wanted = new Set();

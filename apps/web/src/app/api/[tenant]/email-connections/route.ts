@@ -1,32 +1,17 @@
+import { randomBytes } from "crypto";
 import { NextRequest } from "next/server";
 import { Action, emailConnectionSchema, ValidationError } from "@pratibha/shared";
 import { sealSecret } from "@pratibha/shared/crypto";
+import { inboundDomain, newForwardToken, oauthConfigured } from "@pratibha/shared/mail-oauth";
 import type { EmailConnection } from "@pratibha/prisma";
 import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { checkImap, deriveImapDefaults } from "@/lib/imap";
 import { redactConnection } from "@/lib/email-connection";
+import { assertPlanAllows, assertWithinPlanLimit, planAllows, planLimit } from "@/lib/plan-features";
 
 // ImapFlow is a Node socket client; this route cannot run on the edge runtime.
 export const runtime = "nodejs";
-
-function buildGmailOAuthUrl(state: string): string | null {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI;
-  if (!clientId || !redirectUri) return null;
-
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: "code",
-    scope: "https://www.googleapis.com/auth/gmail.readonly",
-    access_type: "offline",
-    prompt: "consent",
-    state,
-  });
-
-  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-}
 
 export async function GET(
   request: NextRequest,
@@ -48,12 +33,25 @@ export async function GET(
         orderBy: { createdAt: "desc" },
       });
 
-      const enriched = connections.map((c: EmailConnection) => ({
-        ...redactConnection(c),
-        oauthUrl: c.provider === "gmail" ? buildGmailOAuthUrl(c.id) : null,
-      }));
-
-      return { connections: enriched, jobs };
+      return {
+        connections: connections.map((c: EmailConnection) => redactConnection(c)),
+        jobs,
+        // Which sign-in buttons can work on this server, and where forwarded
+        // mail is received.
+        options: {
+          gmailOAuth: oauthConfigured("gmail"),
+          outlookOAuth: oauthConfigured("outlook"),
+          inboundDomain: inboundDomain(),
+        },
+        // What the plan includes, so the panel can explain a refusal before it
+        // happens. mailboxLimit null is unlimited.
+        plan: {
+          autoRoute: planAllows(ctx.tenant, "auto_route_mailboxes"),
+          forwarding: planAllows(ctx.tenant, "email_forwarding"),
+          signIn: planAllows(ctx.tenant, "gmail_outlook_signin"),
+          mailboxLimit: planLimit(ctx.tenant, "mailboxes"),
+        },
+      };
     })
   );
 }
@@ -81,7 +79,30 @@ export async function POST(
         if (!job) throw new ValidationError("defaultJobId does not name a job in this tenant");
       }
 
+      // Gmail and Outlook sign-in goes through the OAuth redirect, which is the
+      // only place their tokens are obtained. Gmail with an app password is
+      // provider 'imap' against imap.gmail.com.
+      if (input.provider === "gmail" || input.provider === "outlook") {
+        throw new ValidationError("Use the Sign in button to connect Gmail or Outlook.");
+      }
+
+      if (input.provider === "forward_alias") {
+        assertPlanAllows(ctx.tenant, "email_forwarding", "Connecting by forwarding address is not included in your plan.");
+      }
+      if (input.autoRoute) {
+        assertPlanAllows(ctx.tenant, "auto_route_mailboxes", "Auto routing is not included in your plan. Choose the one job this mailbox files into.");
+      }
+      const mailboxes = await tx.emailConnection.count({ where: { tenantId: ctx.tenant.id } });
+      assertWithinPlanLimit(ctx.tenant, "mailboxes", mailboxes, 1, (max) =>
+        `Your plan allows ${max} connected ${max === 1 ? "mailbox" : "mailboxes"}. Disconnect one or upgrade your plan to add another.`
+      );
+
       let imapData = {};
+      let forwardData = {};
+
+      if (input.provider === "forward_alias") {
+        forwardData = { forwardToken: newForwardToken(tenant, () => randomBytes(16)) };
+      }
 
       if (input.provider === "imap") {
         const defaults = deriveImapDefaults(input.address);
@@ -119,15 +140,11 @@ export async function POST(
           ...(input.defaultJobId && { defaultJobId: input.defaultJobId }),
           ...(input.autoRoute !== undefined && { autoRoute: input.autoRoute }),
           ...imapData,
+          ...forwardData,
         },
       });
 
-      return {
-        connection: {
-          ...redactConnection(connection),
-          oauthUrl: connection.provider === "gmail" ? buildGmailOAuthUrl(connection.id) : null,
-        },
-      };
+      return { connection: redactConnection(connection) };
     });
   });
 }

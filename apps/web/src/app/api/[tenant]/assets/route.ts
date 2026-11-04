@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { Action, ValidationError, writeAuditLog } from "@pratibha/shared";
 import { authorizeTenant } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
-import { checkImageUpload, storage, MAX_IMAGE_BYTES } from "@/lib/storage";
+import { checkImageUpload, formatMegabytes, storage } from "@/lib/storage";
+import { platformSettings } from "@/lib/platform-settings";
 
 export const runtime = "nodejs";
 
@@ -44,13 +45,15 @@ export async function POST(
     const action = kind === "company_logo" ? Action.settingsUpdate : Action.candidateRead;
     const { ctx, tx } = await authorizeTenant(tenant, action);
 
-    // Read once, cap before buffering the whole thing into memory.
-    if (file.size > MAX_IMAGE_BYTES) {
-      throw new ValidationError("Images must be 2 MB or smaller.");
+    // Read once, cap before buffering the whole thing into memory. The limit is
+    // a platform setting (DB config), so it can change without a deploy.
+    const { logoMaxBytes } = await platformSettings();
+    if (file.size > logoMaxBytes) {
+      throw new ValidationError(`Images must be ${formatMegabytes(logoMaxBytes)} or smaller.`);
     }
     const body = Buffer.from(await file.arrayBuffer());
 
-    const check = checkImageUpload(body, file.type);
+    const check = checkImageUpload(body, file.type, logoMaxBytes);
     if (!check.ok) throw new ValidationError(check.error ?? "That file cannot be used.");
 
     const stored = await storage.put({

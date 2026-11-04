@@ -8,7 +8,7 @@ import { PrintButton } from "./PrintButton";
 export const dynamic = "force-dynamic";
 
 type Party = { legalName?: string; gstin?: string | null; address?: string | null; state?: string | null; stateCode?: string | null };
-type Line = { description: string; hsnSac: string; quantity: number; unitPaise: number; amountPaise: number };
+type Line = { description: string; hsnSac: string; quantity: number; unitPaise: number; amountPaise: number; gstRatePercent?: number };
 
 /** One tax invoice, as issued: seller and buyer are the snapshots taken at issue time. */
 export default async function InvoicePage({ params }: { params: { id: string } }) {
@@ -23,6 +23,8 @@ export default async function InvoicePage({ params }: { params: { id: string } }
   const lines = inv.lines as unknown as Line[];
   const taxable = inv.subtotalPaise - inv.discountPaise;
   const intra = inv.cgstPaise > 0 || inv.sgstPaise > 0;
+  // The rate this invoice was issued at; older invoices did not record it and were all 18%.
+  const rate = lines.find((l) => typeof l.gstRatePercent === "number")?.gstRatePercent ?? 18;
 
   return (
     <>
@@ -50,7 +52,7 @@ export default async function InvoicePage({ params }: { params: { id: string } }
         <div style={{ margin: "22px 0", fontSize: 13 }}>
           <div className="label">Billed to</div>
           <b>{buyer.legalName}</b>
-          {buyer.address && <div>{buyer.address}</div>}
+          {buyer.address && <div style={{ whiteSpace: "pre-line" }}>{buyer.address}</div>}
           <div>{buyer.state ?? "State not on file"}{buyer.stateCode ? ` (${buyer.stateCode})` : ""}</div>
           <div>GSTIN {buyer.gstin ?? "not provided"}</div>
           <div style={{ marginTop: 6 }}>Place of supply: {inv.placeOfSupply}</div>
@@ -73,11 +75,11 @@ export default async function InvoicePage({ params }: { params: { id: string } }
             <tr><td colSpan={4}>Taxable value</td><td className="num">{inrPaise(taxable)}</td></tr>
             {intra ? (
               <>
-                <tr><td colSpan={4}>CGST 9%</td><td className="num">{inrPaise(inv.cgstPaise)}</td></tr>
-                <tr><td colSpan={4}>SGST 9%</td><td className="num">{inrPaise(inv.sgstPaise)}</td></tr>
+                <tr><td colSpan={4}>CGST {rate / 2}%</td><td className="num">{inrPaise(inv.cgstPaise)}</td></tr>
+                <tr><td colSpan={4}>SGST {rate / 2}%</td><td className="num">{inrPaise(inv.sgstPaise)}</td></tr>
               </>
             ) : (
-              <tr><td colSpan={4}>IGST 18%</td><td className="num">{inrPaise(inv.igstPaise)}</td></tr>
+              <tr><td colSpan={4}>IGST {rate}%</td><td className="num">{inrPaise(inv.igstPaise)}</td></tr>
             )}
             <tr className="total"><td colSpan={4}>Total</td><td className="num">{inrPaise(inv.totalPaise)}</td></tr>
           </tbody>

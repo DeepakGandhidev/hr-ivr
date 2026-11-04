@@ -6,6 +6,8 @@ import Link from "next/link";
 import MarkdownEditor from "@/components/MarkdownEditor";
 import Markdown, { markdownToPlain, truncateEnd } from "@/components/Markdown";
 import Time from "@/components/Time";
+import SalaryBandFields, { bandText, bandValue } from "@/components/SalaryBandFields";
+import { useCopy, useRichCopy } from "@/lib/copy-client";
 
 interface JobVersion {
   id: string;
@@ -35,6 +37,8 @@ interface Job {
   title: string;
   location?: string | null;
   salaryBand?: string | null;
+  salaryMin?: number | null;
+  salaryMax?: number | null;
   experienceRange?: string | null;
   mustHaves: string[];
   goodToHaves: string[];
@@ -47,6 +51,8 @@ const asList = (value: string) =>
   value.split("\n").map((line) => line.trim()).filter(Boolean);
 
 export default function EditJobPage({ params }: { params: { tenant: string; id: string } }) {
+  const t = useCopy();
+  const rich = useRichCopy();
   const router = useRouter();
   const { tenant, id } = params;
 
@@ -54,6 +60,8 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
   const [title, setTitle] = useState("");
   const [location, setLocation] = useState("");
   const [salaryBand, setSalaryBand] = useState("");
+  const [bandMin, setBandMin] = useState("");
+  const [bandMax, setBandMax] = useState("");
   const [experienceRange, setExperienceRange] = useState("");
   const [mustHaves, setMustHaves] = useState("");
   const [goodToHaves, setGoodToHaves] = useState("");
@@ -77,6 +85,8 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
     setTitle(loaded.title ?? "");
     setLocation(loaded.location ?? "");
     setSalaryBand(loaded.salaryBand ?? "");
+    setBandMin(bandText(loaded.salaryMin));
+    setBandMax(bandText(loaded.salaryMax));
     setExperienceRange(loaded.experienceRange ?? "");
     setMustHaves((loaded.mustHaves ?? []).join("\n"));
     setGoodToHaves((loaded.goodToHaves ?? []).join("\n"));
@@ -117,6 +127,8 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
           title,
           location: location || null,
           salaryBand: salaryBand || null,
+          salaryMin: bandValue(bandMin),
+          salaryMax: bandValue(bandMax),
           experienceRange: experienceRange || null,
           mustHaves: asList(mustHaves),
           goodToHaves: asList(goodToHaves),
@@ -148,23 +160,20 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
     <div style={{ maxWidth: 720 }}>
       <div className="page-head">
         <Link href={`/${tenant}/jobs/${id}`} className="subtle">&larr; {job.title}</Link>
-        <h1 style={{ marginTop: 6 }}>Edit role</h1>
+        <h1 style={{ marginTop: 6 }}>{t("copy.portal.jobs.edit_title")}</h1>
         <p className="muted">
-          Saving keeps the previous version. Nothing is overwritten.
+          {t("copy.portal.jobs.edit_intro")}
         </p>
       </div>
 
       {livePosts.length > 0 && (
         <div className="notice notice-info" style={{ marginBottom: 16 }}>
-          <strong>This role is published.</strong> It is live on{" "}
-          {livePosts.map((p) => p.channel).join(", ")}. Editing here does not update the live
-          posting — you will need to publish again for applicants to see these changes.
+          {rich("copy.portal.jobs.edit_published", { channels: livePosts.map((p) => p.channel).join(", ") })}
           {bodyMd !== originalBody && (
             // Called out separately because the description is the part
             // applicants actually read: a stale salary band is wrong, a stale
             // JD is the whole advert.
-            <> <strong>The job description has changed</strong>, so the published
-            advert still shows the old text.</>
+            <> {rich("copy.portal.jobs.edit_jd_changed")}</>
           )}
         </div>
       )}
@@ -189,6 +198,8 @@ export default function EditJobPage({ params }: { params: { tenant: string; id: 
             <input value={experienceRange} onChange={(e) => setExperienceRange(e.target.value)} />
           </label>
         </div>
+
+        <SalaryBandFields min={bandMin} max={bandMax} onMin={setBandMin} onMax={setBandMax} />
 
         <label>
           <div className="subtle">Must have — one per line</div>

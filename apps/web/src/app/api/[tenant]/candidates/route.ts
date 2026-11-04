@@ -9,8 +9,10 @@ import {
 } from "@pratibha/shared";
 import { authorizeTenant, withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
+import { assertWithinPlanLimit, monthStart, planLimit } from "@/lib/plan-features";
 import { ingestCvFile, ingestManualCandidate, type IngestFileResult } from "@/lib/cv-intake";
 import { z } from "zod";
+import { ACTIVE_CANDIDATE } from "@/lib/candidates";
 
 /**
  * pdf-parse loads pdf.js, which reaches for Node built-ins and its own worker.
@@ -40,10 +42,14 @@ export async function GET(
 
     return withTenantAuth(tenant, Action.candidateRead, async (_ctx, tx) => {
       const candidates = await tx.candidate.findMany({
-        where: { jobId: query.data.jobId },
+        // Archived and not-an-application candidates live only in the
+        // Pipeline's own filters (Batch 7).
+        where: { jobId: query.data.jobId, ...ACTIVE_CANDIDATE },
         orderBy: { createdAt: "desc" },
         include: {
-          screenings: { orderBy: { createdAt: "desc" }, take: 1 },
+          // The screening for THIS job: one from a role they were moved off
+          // stays in their history, not here.
+          screenings: { where: { jobId: query.data.jobId }, orderBy: { createdAt: "desc" }, take: 1 },
           shortlistItems: { include: { shortlist: true } },
           // Whether an interview report exists, so the row can open it.
           interviewCalls: {
@@ -128,6 +134,21 @@ export async function POST(
     if (files.length > MAX_CV_UPLOAD_FILES) {
       throw new ValidationError(
         `Up to ${MAX_CV_UPLOAD_FILES} CVs per request. You attached ${files.length}.`
+      );
+    }
+
+    // The plan's monthly CV upload limit. Counted as candidates created by
+    // upload this calendar month; mailbox arrivals and typed-in candidates do
+    // not count. The batch is refused whole rather than half imported.
+    if (planLimit(ctx.tenant, "cv_uploads_per_month") !== null) {
+      const since = monthStart();
+      const uploaded = await tx((db) =>
+        db.candidate.count({
+          where: { createdAt: { gte: since }, cvParsed: { path: ["intake", "via"], equals: "upload" } },
+        })
+      );
+      assertWithinPlanLimit(ctx.tenant, "cv_uploads_per_month", uploaded, files.length, (max, used) =>
+        `Your plan allows ${max} CV uploads a month and ${Math.max(0, max - used)} are left. You attached ${files.length}. Upgrade your plan or wait for next month.`
       );
     }
 

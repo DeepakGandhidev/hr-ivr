@@ -17,6 +17,38 @@
     "./limits": {
       "import": "./dist/limits.js",
       "types": "./dist/limits.d.ts"
+    },
+    "./mail-oauth": {
+      "import": "./dist/mailOAuth.js",
+      "types": "./dist/mailOAuth.d.ts"
+    },
+    "./settings-registry": {
+      "import": "./dist/settingsRegistry.js",
+      "types": "./dist/settingsRegistry.d.ts"
+    },
+    "./settings-runtime": {
+      "import": "./dist/settingsRuntime.js",
+      "types": "./dist/settingsRuntime.d.ts"
+    },
+    "./platform-mail": {
+      "import": "./dist/platformMail.js",
+      "types": "./dist/platformMail.d.ts"
+    },
+    "./mailer": {
+      "import": "./dist/mailer.js",
+      "types": "./dist/mailer.d.ts"
+    },
+    "./email-kinds": {
+      "import": "./dist/emailKinds.js",
+      "types": "./dist/emailKinds.d.ts"
+    },
+    "./whatsapp": {
+      "import": "./dist/whatsapp.js",
+      "types": "./dist/whatsapp.d.ts"
+    },
+    "./whatsapp-kinds": {
+      "import": "./dist/whatsappKinds.js",
+      "types": "./dist/whatsappKinds.d.ts"
     }
   },
   "scripts": {
@@ -24,10 +56,12 @@
     "test": "echo 'shared tests: none yet'"
   },
   "dependencies": {
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "nodemailer": "^9.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "@types/nodemailer": "^6.4.16"
   }
 }

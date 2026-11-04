@@ -1,6 +1,7 @@
 import type { Prisma, Tenant, Subscription, PaymentKind, PaymentStatus } from "@pratibha/prisma";
-import { calculateInvoice, financialYear, nextInvoiceNumber, gstStateCode } from "@pratibha/shared";
+import { calculateInvoice, financialYear, formatAddress, nextInvoiceNumber, gstStateCode } from "@pratibha/shared";
 import type { Tx } from "@/lib/db";
+import { getSettings } from "@/lib/settings";
 
 /**
  * The manual-era ledger: payments, and the GST invoice behind every captured
@@ -20,14 +21,19 @@ export const METHOD_LABEL: Record<string, string> = {
   none: "—",
 };
 
-/** Who is selling. The same environment the portal's invoices read, so both series agree. */
-export function sellerIdentity() {
+/**
+ * Who is selling. The same settings the portal's invoices read (Billing, Tax
+ * and invoices: saved in the panel, else the INVOICE_* environment), so both
+ * series agree.
+ */
+export async function sellerIdentity() {
+  const s = await getSettings();
   return {
-    legalName: process.env.INVOICE_SELLER_NAME ?? "Promonkey Technologies LLP",
-    gstin: process.env.INVOICE_SELLER_GSTIN ?? null,
-    address: process.env.INVOICE_SELLER_ADDRESS ?? "",
-    state: process.env.INVOICE_SELLER_STATE ?? "Karnataka",
-    invoicePrefix: process.env.INVOICE_NUMBER_PREFIX ?? "PMT",
+    legalName: s["billing.seller_name"] as string,
+    gstin: (s["billing.seller_gstin"] as string) || null,
+    address: s["billing.seller_address"] as string,
+    state: s["billing.seller_state"] as string,
+    invoicePrefix: s["billing.invoice_prefix"] as string,
   };
 }
 
@@ -74,7 +80,7 @@ export async function issueInvoice(
 ) {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('pratibha.invoice_number'))`;
 
-  const seller = sellerIdentity();
+  const seller = await sellerIdentity();
   const profile = await tx.companyProfile.findUnique({ where: { tenantId: tenant.id } });
   const totals = calculateInvoice({
     lines,
@@ -107,7 +113,11 @@ export async function issueInvoice(
       seller: { ...seller, stateCode: gstStateCode(seller.state) },
       buyer: {
         legalName: profile?.legalName ?? tenant.name,
-        address: profile?.billingAddress ?? null,
+        address:
+          // The state prints on its own line, so it is left out of the block.
+          formatAddress({ addressLine: profile?.addressLine, city: profile?.city, pinCode: profile?.pinCode }) ??
+          profile?.billingAddress ??
+          null,
         state: profile?.billingState ?? null,
         stateCode: gstStateCode(profile?.billingState),
         gstin: profile?.gstin ?? null,

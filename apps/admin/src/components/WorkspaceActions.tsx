@@ -87,7 +87,8 @@ export function WorkspaceDialogs({
   );
 }
 
-function useSubmit() {
+/** Busy and error state for a dialog's submit; refreshes the page's server data on success. */
+export function useSubmit() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

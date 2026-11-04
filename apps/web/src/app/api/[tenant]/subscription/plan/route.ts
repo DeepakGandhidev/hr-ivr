@@ -5,6 +5,11 @@ import { handleApi } from "@/lib/api-errors";
 import { getOrCreateSubscription, planComparison } from "@/lib/subscription";
 import { currentUsagePeriod } from "@/lib/billing";
 import { currentPlan } from "@/lib/pricing";
+import { paymentProvider } from "@/lib/payments";
+import { issueInvoice, nextPeriodEnd } from "@/lib/autopay";
+import { billingPhone, proratedUpgradePaise, startCheckout } from "@/lib/checkout";
+import { notifyPlanChanged } from "@/lib/billing-emails";
+import { adminPrisma } from "@pratibha/prisma";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -14,6 +19,8 @@ const planSchema = z.object({
   planId: z.string().min(1),
   /** Preview the change without making it. */
   preview: z.boolean().optional(),
+  /** For Cashfree's checkout, when none is on file yet. */
+  phone: z.string().max(20).optional(),
 });
 
 /**
@@ -41,7 +48,60 @@ export async function POST(
 
     const { ctx, tx } = await authorizeTenant(tenant, Action.billingManage);
 
-    return tx(async (db) => {
+    // With Cashfree connected, buying a plan from the trial, or upgrading,
+    // is paid on Cashfree's page first; the plan moves when the payment lands.
+    // A trial pays the full month and starts its period then; an upgrade pays
+    // the price difference for what is left of the current period. Downgrades
+    // fall through to the immediate change below, and the next renewal charges
+    // the lower price.
+    if (paymentProvider().name === "cashfree" && !parsed.data.preview) {
+      const asRow = await adminPrisma.plan.findUnique({ where: { id: parsed.data.planId } });
+      const target = await currentPlan(asRow?.key ?? parsed.data.planId);
+      if (!target || target.visibility !== "public") throw new ValidationError("Unknown plan");
+      const onTrial = ctx.tenant.status === "trial";
+      const upgrade = !onTrial && target.priceInr > (ctx.tenant.plan?.priceInr ?? 0);
+
+      if (onTrial || upgrade) {
+        const sub = await tx((db) => getOrCreateSubscription(db, ctx.tenant));
+        const now = new Date();
+        const subtotal = onTrial
+          ? target.priceInr * 100
+          : proratedUpgradePaise(ctx.tenant.plan.priceInr, target.priceInr, { start: sub.periodStart, end: sub.periodEnd }, now);
+
+        if (subtotal >= 100) {
+          const phone = await billingPhone(ctx.tenant.id, parsed.data.phone);
+          if (!phone) throw new ValidationError("Enter your mobile number to pay.", { code: "PHONE_REQUIRED" });
+          const invoice = await adminPrisma.$transaction((db) =>
+            issueInvoice(
+              db,
+              ctx.tenant,
+              sub,
+              {
+                description: onTrial
+                  ? `${target.name} plan, monthly`
+                  : `Upgrade to ${target.name} for the rest of this period`,
+                unitPaise: subtotal,
+              },
+              onTrial ? { start: now, end: nextPeriodEnd(now) } : { start: sub.periodStart, end: sub.periodEnd }
+            )
+          );
+          const checkout = await startCheckout({
+            tenantId: ctx.tenant.id,
+            tenantSlug: tenant,
+            customer: { email: ctx.user.email, name: ctx.user.name, phone },
+            invoice,
+            purpose: "plan_change",
+            planId: target.id,
+          });
+          return NextResponse.json({ checkout, invoice: { number: invoice.number, totalPaise: invoice.totalPaise } });
+        }
+      }
+    }
+
+    // Set once the change is written; the email goes after the commit.
+    let changed = null as { fromPlanId: string | null; toPlanId: string } | null;
+
+    const response = await tx(async (db) => {
       const subscription = await getOrCreateSubscription(db, ctx.tenant);
 
       const meter = await db.usageMeter.findUnique({
@@ -95,6 +155,7 @@ export async function POST(
           : undefined,
       });
 
+      changed = { fromPlanId: ctx.tenant.status === "trial" ? null : ctx.tenant.planId, toPlanId: target.id };
       return NextResponse.json({
         subscription: updated,
         comparison,
@@ -102,5 +163,8 @@ export async function POST(
         note: "Your plan has been updated. Billing for the change will be actioned by the Pratibha team.",
       });
     });
+
+    if (changed) await notifyPlanChanged({ tenantId: ctx.tenant.id, ...changed });
+    return response;
   });
 }

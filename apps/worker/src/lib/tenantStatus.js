@@ -3,7 +3,7 @@
  * Pure, so the call flow and the screening runner can share it without a
  * database import.
  */
-const PAUSED_TENANT_STATUSES = new Set(['suspended', 'deleted_pending', 'deleted']);
+const PAUSED_TENANT_STATUSES = new Set(['suspended', 'deleted_pending', 'deleted', 'pending_payment']);
 
 export function isTenantPaused(tenant) {
   return Boolean(tenant && PAUSED_TENANT_STATUSES.has(tenant.status));

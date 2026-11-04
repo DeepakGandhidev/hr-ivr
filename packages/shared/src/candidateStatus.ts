@@ -32,6 +32,24 @@ export const CANDIDATE_STATUS_LABELS: Record<CandidateStatus, string> = {
 };
 
 /**
+ * Where the admin panel keeps a status's display name (Text and emails,
+ * Candidate statuses). Only the wording is editable; codes and order are not.
+ */
+export function candidateStatusCopyKey(status: CandidateStatus): string {
+  return `copy.status.${status}`;
+}
+
+/**
+ * A status's display name: the wording in `copy` (a copy-key → text map, as
+ * the portal's copy channel carries) when set, else the built-in label.
+ * Works anywhere, client or server, since it only reads the map it is given.
+ */
+export function candidateStatusLabel(status: CandidateStatus, copy?: Record<string, string>): string {
+  const custom = copy?.[candidateStatusCopyKey(status)];
+  return custom && custom.trim() ? custom : CANDIDATE_STATUS_LABELS[status];
+}
+
+/**
  * The four the system reaches on its own, in the order events happen.
  *
  * `rank` is only meaningful within this list: it is what stops a late-arriving

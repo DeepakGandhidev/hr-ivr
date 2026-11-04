@@ -4,6 +4,17 @@ import { recordActivity } from "@/lib/activity";
 import { badRequest, conflict, notFound } from "@/lib/http";
 import { currentPlans, currentTrial, limitsJson, packLabel, sortPlans } from "@/lib/pricing";
 import { PAYING, mrrOf } from "@/lib/workspaces";
+import {
+  PLAN_FEATURE_KEYS,
+  PLAN_JSON_LIMIT_KEYS,
+  planEntitlementsError,
+  planFeatureDef,
+  planLimitDef,
+  savedPlanFeatures,
+  savedPlanLimits,
+  type PlanFeatureKey,
+  type PlanJsonLimitKey,
+} from "@pratibha/shared";
 
 /**
  * Drafts and the publish that makes them live.
@@ -27,6 +38,66 @@ export interface PlanFields {
 
 const PLAN_FIELDS: (keyof PlanFields)[] = ["priceInr", "slashedPriceInr", "minutes", "screenings", "jobLimit", "visibility"];
 
+/**
+ * What a plan includes beyond its columns, as saved on the row: catalogue
+ * feature switches in plans.features and catalogue limits in plans.limits.
+ * Only keys the admin has set are present; an absent key means the default
+ * (or, for portal posts and interview tuning, the platform gate), which is how
+ * every plan published before this existed keeps behaving as it did.
+ */
+export interface PlanEntitlements {
+  features: Partial<Record<PlanFeatureKey, boolean>>;
+  limits: Partial<Record<PlanJsonLimitKey, number | null>>;
+}
+
+type PlanRowLike = Pick<Plan, keyof PlanFields | "features" | "limits">;
+
+export function entitlementsOf(p: Pick<Plan, "features" | "limits">): PlanEntitlements {
+  return { features: savedPlanFeatures(p.features), limits: savedPlanLimits(p.limits) };
+}
+
+export function validateEntitlements(e: PlanEntitlements) {
+  const error = planEntitlementsError(e);
+  if (error) throw badRequest(error);
+}
+
+/** plans.features with the catalogue keys replaced; legacy keys are kept as they were. */
+export function mergeFeaturesJson(previous: unknown, features: PlanEntitlements["features"]) {
+  const prev = { ...((previous ?? {}) as Record<string, unknown>) };
+  for (const k of PLAN_FEATURE_KEYS) delete prev[k];
+  return { ...prev, ...features };
+}
+
+/** plans.limits with the catalogue keys replaced; the column mirrors are rewritten by limitsJson. */
+export function mergeLimitsJson(previous: unknown, limits: PlanEntitlements["limits"]) {
+  const prev = { ...((previous ?? {}) as Record<string, unknown>) };
+  for (const k of PLAN_JSON_LIMIT_KEYS) delete prev[k];
+  return { ...prev, ...limits };
+}
+
+function sameEntitlements(a: PlanEntitlements, b: PlanEntitlements) {
+  return (
+    PLAN_FEATURE_KEYS.every((k) => a.features[k] === b.features[k]) &&
+    PLAN_JSON_LIMIT_KEYS.every((k) => (k in a.limits) === (k in b.limits) && a.limits[k] === b.limits[k])
+  );
+}
+
+function describeEntitlementChanges(live: PlanEntitlements, draft: PlanEntitlements): string[] {
+  const out: string[] = [];
+  const onOff = (v: boolean | undefined) => (v === undefined ? "default" : v ? "on" : "off");
+  for (const k of PLAN_FEATURE_KEYS) {
+    if (live.features[k] !== draft.features[k]) out.push(`${planFeatureDef(k).label} ${onOff(draft.features[k])}`);
+  }
+  const amount = (e: PlanEntitlements, k: PlanJsonLimitKey) =>
+    !(k in e.limits) ? "default" : e.limits[k] === null ? "unlimited" : String(e.limits[k]);
+  for (const k of PLAN_JSON_LIMIT_KEYS) {
+    if (amount(live, k) !== amount(draft, k)) {
+      out.push(`${planLimitDef(k).label.toLowerCase()} ${amount(live, k)} to ${amount(draft, k)}`);
+    }
+  }
+  return out;
+}
+
 export function validatePlanFields(f: PlanFields) {
   const whole = (n: number) => Number.isInteger(n) && n > 0;
   if (!whole(f.priceInr)) throw badRequest("The sale price must be a whole number of rupees above zero.");
@@ -42,7 +113,7 @@ function sameFields(a: PlanFields, b: Pick<Plan, keyof PlanFields>) {
   return PLAN_FIELDS.every((k) => a[k] === b[k]);
 }
 
-function describeChange(live: Pick<Plan, keyof PlanFields>, draft: Pick<Plan, keyof PlanFields>): string[] {
+function describeChange(live: PlanRowLike, draft: PlanRowLike): string[] {
   const out: string[] = [];
   const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
   if (live.priceInr !== draft.priceInr) out.push(`${inr(live.priceInr)} to ${inr(draft.priceInr)}`);
@@ -55,6 +126,7 @@ function describeChange(live: Pick<Plan, keyof PlanFields>, draft: Pick<Plan, ke
     out.push(`${live.jobLimit ?? "unlimited"} to ${draft.jobLimit ?? "unlimited"} open jobs`);
   }
   if (live.visibility !== draft.visibility) out.push(draft.visibility === "hidden" ? "hidden from sale" : "on sale");
+  out.push(...describeEntitlementChanges(entitlementsOf(live), entitlementsOf(draft)));
   return out;
 }
 
@@ -103,15 +175,21 @@ export async function pricingBoard() {
 // Plan drafts
 // ---------------------------------------------------------------------------
 
-export async function savePlanDraft(admin: AdminUser, key: string, fields: PlanFields) {
+/**
+ * `entitlements` left out keeps what is live (a caller that predates feature
+ * editing cannot wipe them); given, it is the complete set of saved values.
+ */
+export async function savePlanDraft(admin: AdminUser, key: string, fields: PlanFields, entitlements?: PlanEntitlements) {
   validatePlanFields(fields);
+  if (entitlements) validateEntitlements(entitlements);
   return db.$transaction(async (tx) => {
     const live = await tx.plan.findFirst({ where: { key, status: "published" }, orderBy: { version: "desc" } });
     if (!live) throw notFound("That plan does not exist.");
     const existing = await tx.plan.findFirst({ where: { key, status: "draft" } });
+    const wanted = entitlements ?? entitlementsOf(live);
 
     // Edited back to what is live: there is nothing to publish for this plan.
-    if (sameFields(fields, live)) {
+    if (sameFields(fields, live) && sameEntitlements(wanted, entitlementsOf(live))) {
       if (existing) await tx.plan.delete({ where: { id: existing.id } });
       return { message: `${live.name} matches what is live; no draft kept.`, draft: false };
     }
@@ -122,8 +200,8 @@ export async function savePlanDraft(admin: AdminUser, key: string, fields: PlanF
       version: live.version + 1,
       status: "draft" as const,
       ...fields,
-      features: live.features ?? {},
-      limits: limitsJson(fields, live.limits),
+      features: mergeFeaturesJson(live.features, wanted.features),
+      limits: limitsJson(fields, mergeLimitsJson(live.limits, wanted.limits)),
     };
     const draft = existing
       ? await tx.plan.update({ where: { id: existing.id }, data })
@@ -157,8 +235,11 @@ export async function discardPlanDraft(admin: AdminUser, key: string) {
   });
 }
 
-function pick(p: Pick<Plan, keyof PlanFields | "version">) {
+function pick(p: Pick<Plan, keyof PlanFields | "version" | "features" | "limits">) {
+  const e = entitlementsOf(p);
   return {
+    features: e.features,
+    limits: e.limits,
     version: p.version,
     priceInr: p.priceInr,
     slashedPriceInr: p.slashedPriceInr,

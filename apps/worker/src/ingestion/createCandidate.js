@@ -86,7 +86,32 @@ export async function upsertCandidate(tenantId, payload, options = {}) {
   // so it wins when both are present.
   const email = clean(payload.from ?? parsed.email);
   const phoneE164 = normalizePhoneE164(parsed.phone) ?? null;
-  const name = clean(parsed.name ?? payload.fromName);
+  // PL90: the CV text first, the sender's display name second, the subject
+  // line last, recording which one won. A CV that could not be read falls
+  // back to the mail text, whose first line is usually the subject, so a name
+  // found there is not treated as coming from the CV.
+  const typedByPerson = Boolean(payload.parsed) && !cvBuffer;
+  const cvName = typedByPerson ? null : extraction?.ok ? clean(parsed.name) : null;
+  const senderName = clean(payload.fromName && !payload.fromName.includes('@') ? payload.fromName : null);
+  const subjectName = clean(payload.subject);
+  let name;
+  let nameSource;
+  if (typedByPerson) {
+    name = clean(parsed.name);
+    nameSource = null;
+  } else if (cvName) {
+    name = cvName;
+    nameSource = 'cv';
+  } else if (senderName) {
+    name = senderName;
+    nameSource = 'sender';
+  } else if (subjectName) {
+    name = subjectName;
+    nameSource = 'subject';
+  } else {
+    name = null;
+    nameSource = null;
+  }
 
   // "Parsed" means we got something a recruiter or the interviewer can use.
   // An unreadable scan with no body text is a failure worth surfacing, not a
@@ -134,7 +159,7 @@ export async function upsertCandidate(tenantId, payload, options = {}) {
         // existing row has none — overwriting would collide with the row that
         // already owns the other id.
         ...(sourceEmailMsgId && !existing.sourceEmailMsgId && { sourceEmailMsgId }),
-        ...(name && !existing.name && { name }),
+        ...(name && !existing.name && { name, nameSource }),
         ...(phoneE164 && !existing.phoneE164 && { phoneE164 }),
         ...(email && !existing.email && { email }),
       },
@@ -142,11 +167,18 @@ export async function upsertCandidate(tenantId, payload, options = {}) {
     return { candidate, created: false, deduped: false };
   }
 
+  // Auto mode (PL10): a matched arrival joins the screening queue at once; in
+  // manual mode it waits as "Awaiting screen" for a person to ask.
+  const tenant = db.tenant ? await db.tenant.findUnique({ where: { id: tenantId }, select: { screeningMode: true } }) : null;
+  const queue = tenant?.screeningMode === 'auto' && routedBy !== 'fallback' && !parseFailed;
+
   const candidate = await db.candidate.create({
     data: {
       tenantId,
       jobId,
       name,
+      nameSource,
+      screeningQueuedAt: queue ? new Date() : null,
       email,
       phoneE164,
       cvFileRef: cvFileRef ?? null,

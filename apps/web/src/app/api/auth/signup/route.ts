@@ -3,13 +3,18 @@ import { adminPrisma } from "@pratibha/prisma";
 import { createClient } from "@/lib/supabase/server";
 import {
   createTenantSchema,
-  DEFAULT_OUTREACH_TEMPLATES,
-  DEFAULT_PROTOCOL_INSTRUCTION,
+  defaultOutreachTemplates,
+  defaultProtocolInstruction,
   PLANS,
   ValidationError,
 } from "@pratibha/shared";
+import { setting, settingText } from "@pratibha/shared/settings-runtime";
 import { currentPlan, currentTrial, trialAllowance } from "@/lib/pricing";
 import { handleApi } from "@/lib/api-errors";
+import { paymentProvider } from "@/lib/payments";
+import { cashfreeConfig } from "@/lib/cashfree";
+import { createConfirmedUser, generateLink, GoTrueError, isEmailTaken, mailerAutoconfirm } from "@/lib/gotrue-admin";
+import { sendSignupConfirmation } from "@/lib/auth-emails";
 
 export async function POST(request: NextRequest) {
   return handleApi(async () => {
@@ -21,6 +26,15 @@ export async function POST(request: NextRequest) {
 
     const { name, slug, ownerEmail, ownerName, password } = parsed.data;
 
+    // The schema's own floor is 8; the admin panel (Security) sets the real one.
+    const minLength = setting<number>("security.signup_password_min_length");
+    if (password.length < minLength) {
+      throw new ValidationError(`Use a password of at least ${minLength} characters.`, {
+        formErrors: [],
+        fieldErrors: { password: [`Use at least ${minLength} characters`] },
+      });
+    }
+
     // Signup is what creates the tenant, so this check predates any tenant context.
     const existingSlug = await adminPrisma.tenant.findUnique({ where: { slug } });
     if (existingSlug) {
@@ -30,26 +44,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = createClient();
-    const { data, error } = await supabase.auth.signUp({
-      email: ownerEmail,
-      password,
-      options: {
-        data: { name: ownerName ?? "" },
-      },
-    });
-
-    if (error) {
-      if (error.message.toLowerCase().includes("already registered")) {
+    // The auth user is made through GoTrue's admin API, which sends nothing:
+    // the confirmation goes out from Pratibha's own mailbox below. Where GoTrue
+    // confirms sign-ups by itself (local development), the account is created
+    // confirmed and signed straight in, as supabase.auth.signUp used to.
+    const autoconfirm = await mailerAutoconfirm();
+    const metadata = { name: ownerName ?? "" };
+    let authUserId: string | null;
+    let confirmToken: string | null = null;
+    try {
+      if (autoconfirm) {
+        authUserId = await createConfirmedUser(ownerEmail, password, metadata);
+      } else {
+        const link = await generateLink({ type: "signup", email: ownerEmail, password, data: metadata });
+        authUserId = link.userId;
+        confirmToken = link.hashedToken;
+      }
+    } catch (err) {
+      if (isEmailTaken(err)) {
         return NextResponse.json(
           { error: "DUPLICATE_EMAIL", message: "Email is already registered" },
           { status: 409 }
         );
       }
-      throw new Error(error.message);
+      // GoTrue's own rules on the address or password (e.g. a weak password).
+      if (err instanceof GoTrueError && err.status < 500) throw new ValidationError(err.message);
+      throw err;
     }
 
-    const authUserId = data.user?.id;
     if (!authUserId) {
       throw new Error("Supabase did not return a user after signup");
     }
@@ -59,6 +81,13 @@ export async function POST(request: NextRequest) {
     const [starter, trial] = await Promise.all([currentPlan("starter"), currentTrial()]);
     const trialEndsAt = new Date();
     trialEndsAt.setDate(trialEndsAt.getDate() + trialAllowance(trial).days);
+    // Signup is paid (the workspace waits on its first month) once Cashfree is
+    // live, or when PAID_SIGNUP=true turns it on for a sandbox test. Sandbox
+    // keys alone never do it: anyone could "pay" with the sandbox simulator.
+    // Without a gateway that can charge, the free trial stands.
+    const paid =
+      paymentProvider().canCharge &&
+      (cashfreeConfig()?.mode === "production" || process.env.PAID_SIGNUP === "true");
 
     try {
       const result = await adminPrisma.$transaction(async (tx) => {
@@ -67,8 +96,8 @@ export async function POST(request: NextRequest) {
             name,
             slug,
             planId: starter?.id ?? PLANS.starter.id,
-            status: "trial",
-            trialEndsAt,
+            status: paid ? "pending_payment" : "trial",
+            trialEndsAt: paid ? null : trialEndsAt,
           },
         });
 
@@ -83,14 +112,14 @@ export async function POST(request: NextRequest) {
         });
 
         await tx.outreachTemplate.createMany({
-          data: DEFAULT_OUTREACH_TEMPLATES.map((t) => ({ ...t, tenantId: tenant.id, isDefault: true })),
+          data: defaultOutreachTemplates(settingText).map((t) => ({ ...t, tenantId: tenant.id, isDefault: true })),
         });
 
         await tx.interviewProtocol.create({
           data: {
             tenantId: tenant.id,
             jobId: null,
-            instructionText: DEFAULT_PROTOCOL_INSTRUCTION,
+            instructionText: defaultProtocolInstruction(settingText),
             version: 1,
           },
         });
@@ -109,7 +138,28 @@ export async function POST(request: NextRequest) {
         return { tenant, user };
       });
 
-      return NextResponse.json(result, { status: 201 });
+      // "not_needed": signed in already. Otherwise the link signs them in and
+      // lands on the workspace. A failed send still leaves a working account:
+      // the form says so and offers to send it again.
+      let confirmation: "sent" | "failed" | "not_needed" = "not_needed";
+      if (confirmToken) {
+        const sent = await sendSignupConfirmation({
+          to: ownerEmail,
+          name: ownerName,
+          workspace: result.tenant.name,
+          tenantId: result.tenant.id,
+          tenantSlug: result.tenant.slug,
+          token: confirmToken,
+          origin: request.nextUrl.origin,
+        }).catch((err: unknown) => ({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+        confirmation = sent.ok ? "sent" : "failed";
+        if (!sent.ok) console.error(`[signup] confirmation to ${ownerEmail} not sent:`, sent.error);
+      } else {
+        const { error } = await createClient().auth.signInWithPassword({ email: ownerEmail, password });
+        if (error) console.error("[signup] could not sign the new owner in:", error.message);
+      }
+
+      return NextResponse.json({ ...result, confirmation }, { status: 201 });
     } catch (err) {
       // TODO: clean up orphaned Supabase auth user on rollback (requires service role key).
       throw err;

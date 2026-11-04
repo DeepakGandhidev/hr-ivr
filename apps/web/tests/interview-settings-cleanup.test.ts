@@ -9,7 +9,7 @@ const page = readFileSync(
   path.join(APP_ROOT, "src/app/[tenant]/settings/protocols/page.tsx"),
   "utf8"
 );
-const css = readFileSync(path.join(APP_ROOT, "src/app/globals.css"), "utf8");
+const css = readFileSync(path.join(APP_ROOT, "src/app/jobs-module.css"), "utf8");
 
 /**
  * Two fields were doing one job: a standalone "Company name" that wrote
@@ -29,16 +29,14 @@ describe("interview settings name fields", () => {
   });
 
   it("keeps one scoped name field", () => {
-    expect(page).toContain('htmlFor="brand"');
-    expect(page.match(/htmlFor="brand"/g)).toHaveLength(1);
+    expect(page.match(/label="Hiring under"/g)).toHaveLength(1);
   });
 
   it("says which name this is, and where the legal one lives", () => {
     // Whitespace-normalised: the copy is line-wrapped in JSX, and how it wraps
     // is not the requirement. That it says which name this is, is.
     const copy = page.replace(/\s+/g, " ");
-    expect(copy).toContain("spoken name, not the legal entity");
-    expect(copy).toContain("Company profile");
+    expect(copy).toContain("The name spoken on calls. The legal name on invoices lives in Company profile.");
   });
 });
 
@@ -59,12 +57,12 @@ describe("interview settings layout", () => {
    * the `.field-hint` rule still exists for the screens that use it.
    */
   it("spaces helper text with a positive gap", () => {
-    const tailwindHint = /hintCls\s*=\s*"[^"]*\bmt-[0-9.]+/.test(page);
-    const legacyHint = page.includes('className="subtle field-hint"');
-    expect(tailwindHint || legacyHint).toBe(true);
+    // Batch 6 moved the page onto the jobs module styles; .is-help carries
+    // the gap now.
+    expect(page).toContain('className="is-help"');
+    expect(css).toMatch(/\.is-help \{ margin: 4px 0 0;/);
 
-    // Nothing may pull text upward, in either system.
+    // Nothing may pull text upward.
     expect(page).not.toMatch(/-mt-[0-9]/);
-    expect(css).toContain(".field-hint");
   });
 });

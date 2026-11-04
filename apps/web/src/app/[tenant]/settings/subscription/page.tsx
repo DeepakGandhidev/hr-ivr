@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { formatInr } from "@pratibha/shared";
+import { openPaymentCheckout, openSubscriptionCheckout } from "@/lib/cashfree-checkout";
+import { useCopy, useRichCopy } from "@/lib/copy-client";
 
 interface Plan {
   id: string;
@@ -42,8 +44,12 @@ interface Payload {
   invoices: Array<{ id: string; number: string; status: string; issuedAt: string; totalPaise: number }>;
   billingDetails: { legalName: string | null; billingAddress: string | null; billingState: string | null; gstin: string | null } | null;
   topUpPacks: Array<{ id: string; kind: "minutes" | "screenings"; quantity: number; minutes: number; pricePaise: number }>;
-  gateway: { name: string; canCharge: boolean };
+  gateway: { name: string; canCharge: boolean; mode: "sandbox" | "production" | null };
   canManage: boolean;
+  /** Days a cancelled workspace's data is kept (admin setting). */
+  retentionDays?: number;
+  billingPhone: string | null;
+  checkoutStatus: "paid" | "pending" | "failed" | null;
 }
 
 /**
@@ -55,6 +61,8 @@ interface Payload {
  * know, comes after.
  */
 export default function SubscriptionPage({ params }: { params: { tenant: string } }) {
+  const t = useCopy();
+  const rich = useRichCopy();
   const { tenant } = params;
 
   const [data, setData] = useState<Payload | null>(null);
@@ -66,21 +74,68 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
   const [cancelling, setCancelling] = useState(false);
   const [cancelReason, setCancelReason] = useState("too_expensive");
   const [cancelComment, setCancelComment] = useState("");
+  const [autopayPhone, setAutopayPhone] = useState("");
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/${tenant}/subscription`);
+    // Back from Cashfree's checkout: pass the reference on once so the server
+    // checks the mandate's status, then drop it from the address bar.
+    // Back from a one-time checkout too: the server settles it if paid.
+    const search = new URLSearchParams(window.location.search);
+    const returned = search.get("autopay");
+    const orderId = search.get("order_id");
+    const query = returned ? `?autopay=${encodeURIComponent(returned)}` : orderId ? `?order_id=${encodeURIComponent(orderId)}` : "";
+    const res = await fetch(`/api/${tenant}/subscription${query}`);
+    if (query) window.history.replaceState(null, "", window.location.pathname);
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       setError(body.message || "Could not load your subscription");
       return;
     }
     setData(body);
+    setAutopayPhone((p) => p || body.billingPhone || "");
+    if (body.checkoutStatus === "paid") setMessage("Payment received. Your purchase is applied and the invoice is marked paid.");
+    else if (body.checkoutStatus === "pending") setMessage("Payment is being confirmed by your bank. This page will show it once it lands; refresh in a minute.");
+    else if (body.checkoutStatus === "failed") setError("The payment did not go through, so nothing was charged. Try again.");
     setContactEmail(body.subscription?.billingContactEmail ?? "");
   }, [tenant]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  /**
+   * A purchase: with Cashfree connected the server answers with a checkout to
+   * open, and the purchase applies when the payment lands. Without it, the
+   * old behaviour (recorded now, settled by the team) stands.
+   */
+  async function buy(url: string, payload: Record<string, unknown>) {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, ...(autopayPhone.trim() ? { phone: autopayPhone.trim() } : {}) }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body.message || "That did not work");
+        return;
+      }
+      if (body.checkout?.paymentSessionId) {
+        const failed = await openPaymentCheckout(body.checkout.paymentSessionId, body.checkout.mode);
+        if (failed) setError(failed);
+        return;
+      }
+      setMessage(body.note ?? body.message ?? "Saved.");
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function act(url: string, init: RequestInit, note?: string) {
     setBusy(true);
@@ -109,13 +164,45 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
     );
   }
 
+  async function setUpAutopay() {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/${tenant}/subscription/mandate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ phone: autopayPhone }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body.message || "Could not start AutoPay");
+        return;
+      }
+      if (body.redirectUrl) {
+        window.location.href = body.redirectUrl;
+        return;
+      }
+      const failed = await openSubscriptionCheckout(body.sessionId, body.mode);
+      if (failed) setError(failed);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const { minutes, subscription } = data;
+  const hasActiveMandate = data.methods.some((m) => m.mandateStatus === "active");
+  // A trial buys a plan rather than switching between them.
+  const onTrial = subscription.status === "trialing";
+  const needsPhone = data.gateway.name === "cashfree" && data.canManage && !data.billingPhone;
   const pct = minutes.limit ? Math.min(100, (minutes.used / minutes.limit) * 100) : 0;
 
   return (
     <div className="dash" style={{ maxWidth: 860 }}>
       <div className="page-head">
-        <h1>Subscription</h1>
+        <h1>{t("copy.portal.subscription.title")}</h1>
       </div>
 
       {error && <div className="notice notice-error" style={{ marginBottom: 16 }}>{error}</div>}
@@ -124,7 +211,7 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
       {/* ---- The meter, first and largest --------------------------------- */}
       <section className="card meter-hero" style={{ marginBottom: 16 }}>
         {minutes.limit === null ? (
-          <p className="muted" style={{ margin: 0 }}>This plan has no minute limit.</p>
+          <p className="muted" style={{ margin: 0 }}>{t("copy.portal.subscription.no_limit")}</p>
         ) : (
           <>
             <div className="meter-figure">
@@ -149,12 +236,12 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
 
             {data.overageMinutes > 0 && (
               <div className="notice notice-error" style={{ marginTop: 12 }}>
-                {data.overageMinutes} minutes used beyond your plan this period.
+                {t("copy.portal.subscription.overage", { minutes: data.overageMinutes })}
               </div>
             )}
             {minutes.level === "warning" && (
               <div className="notice notice-info" style={{ marginTop: 12 }}>
-                You have used {Math.round(pct)}% of your minutes.
+                {t("copy.portal.subscription.usage_warning", { percent: Math.round(pct) })}
               </div>
             )}
           </>
@@ -163,9 +250,10 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
 
       {subscription.cancelRequestedAt && (
         <div className="notice notice-error" style={{ marginBottom: 16 }}>
-          <strong>Scheduled to end</strong> on{" "}
-          {new Date(subscription.periodEnd).toLocaleDateString("en-IN")}. Your data
-          becomes read-only then and is deleted 30 days later.
+          {rich("copy.portal.subscription.cancel_scheduled", {
+            date: new Date(subscription.periodEnd).toLocaleDateString("en-IN"),
+            days: data.retentionDays ?? 30,
+          })}
           {data.canManage && (
             <button
               className="sm"
@@ -175,15 +263,35 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
                 act(`/api/${tenant}/subscription/cancel`, { method: "DELETE" }, "Cancellation reversed.")
               }
             >
-              Keep my subscription
+              {t("copy.portal.subscription.keep_button")}
             </button>
           )}
         </div>
       )}
 
+      {needsPhone && (
+        // Cashfree needs a mobile number for every payment; asked once, kept.
+        <section className="card" style={{ marginBottom: 16 }}>
+          <label htmlFor="pay-phone" style={{ fontWeight: 600 }}>{t("copy.portal.subscription.phone_label")}</label>
+          <input
+            id="pay-phone"
+            type="tel"
+            inputMode="numeric"
+            autoComplete="tel-national"
+            placeholder="98765 43210"
+            value={autopayPhone}
+            onChange={(e) => setAutopayPhone(e.target.value)}
+            style={{ maxWidth: 240, display: "block", marginTop: 6 }}
+          />
+          <p className="subtle field-hint" style={{ marginBottom: 0 }}>
+            {t("copy.portal.subscription.phone_help")}
+          </p>
+        </section>
+      )}
+
       {/* ---- Plan --------------------------------------------------------- */}
       <section className="card" style={{ marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Plan</h3>
+        <h3 style={{ marginTop: 0 }}>{t("copy.portal.subscription.plan_heading")}</h3>
         <div className="plan-grid">
           {data.plans.map((plan) => {
             // Plans on sale are keyed by plan; the workspace may be on an older,
@@ -203,22 +311,18 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
                   <li>{plan.limits.screenings} CV screenings</li>
                   <li>{plan.limits.roles === null ? "Unlimited roles" : `${plan.limits.roles} roles`}</li>
                 </ul>
-                {current ? (
-                  <span className="badge badge-accent">Current plan</span>
+                {current && !onTrial ? (
+                  <span className="badge badge-accent">{t("copy.portal.subscription.current_plan")}</span>
                 ) : (
                   <button
                     className="sm"
                     disabled={!data.canManage || busy}
-                    title={data.canManage ? undefined : "Only the workspace owner can change the plan"}
+                    title={data.canManage ? undefined : t("copy.portal.subscription.owner_only")}
                     onClick={() =>
-                      act(`/api/${tenant}/subscription/plan`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ planId: plan.id }),
-                      })
+                      buy(`/api/${tenant}/subscription/plan`, { planId: plan.id })
                     }
                   >
-                    {data.plan && plan.priceInr > data.plan.priceInr ? "Upgrade" : "Downgrade"}
+                    {onTrial ? "Buy" : data.plan && plan.priceInr > data.plan.priceInr ? "Upgrade" : "Downgrade"}
                   </button>
                 )}
               </div>
@@ -229,36 +333,86 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
 
       {/* ---- Payment ------------------------------------------------------ */}
       <section className="card" style={{ marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Payment method</h3>
+        <h3 style={{ marginTop: 0 }}>{t("copy.portal.subscription.payment_heading")}</h3>
         {!data.gateway.canCharge ? (
           // Said rather than hidden: a disabled button with no explanation
           // reads as broken.
           <p className="subtle" style={{ margin: 0 }}>
-            No payment gateway is connected yet. Plan changes are recorded here
-            and actioned by the Pratibha team.
+            {t("copy.portal.subscription.no_gateway")}
           </p>
-        ) : data.methods.length === 0 ? (
-          <p className="subtle" style={{ margin: 0 }}>No payment method saved.</p>
         ) : (
-          <ul className="method-list">
-            {data.methods.map((m) => (
-              <li key={m.id}>
-                <span>{m.brand ?? m.provider} •••• {m.last4 ?? "????"}</span>
-                <span className={`badge ${m.mandateStatus === "active" ? "badge-success" : "badge-warning"}`}>
-                  mandate {m.mandateStatus}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <>
+            {data.methods.filter((m) => m.mandateStatus !== "revoked").length === 0 ? (
+              <p className="subtle" style={{ marginTop: 0 }}>{t("copy.portal.subscription.no_method")}</p>
+            ) : (
+              <ul className="method-list">
+                {data.methods
+                  .filter((m) => m.mandateStatus !== "revoked")
+                  .map((m) => (
+                    <li key={m.id}>
+                      <span>{m.brand ?? "AutoPay"}{m.last4 ? ` •••• ${m.last4}` : ""}</span>
+                      <span className={`badge ${m.mandateStatus === "active" ? "badge-success" : "badge-warning"}`}>
+                        {m.mandateStatus === "active" ? "AutoPay on" : m.mandateStatus === "pending" ? "awaiting approval" : `mandate ${m.mandateStatus}`}
+                      </span>
+                      {data.canManage && m.mandateStatus !== "failed" && (
+                        <button
+                          type="button"
+                          className="sm ghost"
+                          disabled={busy}
+                          onClick={() =>
+                            act(
+                              `/api/${tenant}/subscription/mandate`,
+                              {
+                                method: "DELETE",
+                                headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ methodId: m.id }),
+                              }
+                            )
+                          }
+                        >
+                          Turn off
+                        </button>
+                      )}
+                    </li>
+                  ))}
+              </ul>
+            )}
+            {data.canManage && !hasActiveMandate && (
+              <form
+                style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void setUpAutopay();
+                }}
+              >
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel-national"
+                  placeholder="Mobile number for AutoPay"
+                  value={autopayPhone}
+                  onChange={(e) => setAutopayPhone(e.target.value)}
+                  style={{ maxWidth: 240 }}
+                />
+                <button type="submit" className="sm primary" disabled={busy || !autopayPhone.trim()}>
+                  {t("copy.portal.subscription.autopay_button")}
+                </button>
+              </form>
+            )}
+            <p className="subtle field-hint" style={{ marginBottom: 0 }}>
+              {t("copy.portal.subscription.autopay_help")}
+            </p>
+          </>
         )}
       </section>
 
       {/* ---- Billing details, from Company profile ------------------------ */}
       <section className="card" style={{ marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Billing details</h3>
+        <h3 style={{ marginTop: 0 }}>{t("copy.portal.subscription.billing_heading")}</h3>
         <p className="subtle field-hint" style={{ marginTop: 0 }}>
-          Taken from <Link href={`/${tenant}/settings/company`}>Company profile</Link>,
-          so there is one source of truth. These appear on every invoice.
+          {t("copy.portal.subscription.billing_help_before")}{" "}
+          <Link href={`/${tenant}/settings/company`}>{t("copy.portal.subscription.billing_help_link")}</Link>
+          {t("copy.portal.subscription.billing_help_after")}
         </p>
         <dl className="detail-list">
           <dt>Legal name</dt><dd>{data.billingDetails?.legalName ?? <em>not set</em>}</dd>
@@ -270,10 +424,9 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
 
       {/* ---- Billing contact ---------------------------------------------- */}
       <section className="card" style={{ marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Billing contact</h3>
+        <h3 style={{ marginTop: 0 }}>{t("copy.portal.subscription.contact_heading")}</h3>
         <p className="subtle field-hint" style={{ marginTop: 0 }}>
-          Invoices go here as well as to the owner. This is an email address, not
-          a login — they will not be able to see candidates or hiring data.
+          {t("copy.portal.subscription.contact_help")}
         </p>
         <div className="row" style={{ gap: 8 }}>
           <input
@@ -306,7 +459,7 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
 
       {/* ---- Top-ups and coupons ------------------------------------------ */}
       <section className="card" style={{ marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Buy more minutes</h3>
+        <h3 style={{ marginTop: 0 }}>{t("copy.portal.subscription.topup_heading")}</h3>
         <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
           {data.topUpPacks.map((pack) => (
             <button
@@ -314,11 +467,7 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
               className="btn"
               disabled={!data.canManage || busy}
               onClick={() =>
-                act(`/api/${tenant}/subscription/top-up`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ packId: pack.id }),
-                })
+                buy(`/api/${tenant}/subscription/top-up`, { packId: pack.id })
               }
             >
               {pack.quantity} {pack.kind === "minutes" ? "minutes" : "CV screenings"} — {formatInr(pack.pricePaise)}
@@ -326,7 +475,7 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
           ))}
         </div>
 
-        <h4 style={{ marginBottom: 6, marginTop: 20 }}>Have a coupon?</h4>
+        <h4 style={{ marginBottom: 6, marginTop: 20 }}>{t("copy.portal.subscription.coupon_heading")}</h4>
         <div className="row" style={{ gap: 8 }}>
           <input
             value={coupon}
@@ -354,9 +503,9 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
 
       {/* ---- Invoices ----------------------------------------------------- */}
       <section className="card" style={{ marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Invoices</h3>
+        <h3 style={{ marginTop: 0 }}>{t("copy.portal.subscription.invoices_heading")}</h3>
         {data.invoices.length === 0 ? (
-          <p className="subtle" style={{ margin: 0 }}>No invoices yet.</p>
+          <p className="subtle" style={{ margin: 0 }}>{t("copy.portal.subscription.invoices_empty")}</p>
         ) : (
           <div className="table-wrap">
             <table>
@@ -386,41 +535,39 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
       {/* ---- Cancel -------------------------------------------------------- */}
       {data.canManage && !subscription.cancelRequestedAt && (
         <section className="card danger-zone">
-          <h3 style={{ marginTop: 0 }}>Cancel subscription</h3>
+          <h3 style={{ marginTop: 0 }}>{t("copy.portal.subscription.cancel_heading")}</h3>
           {!cancelling ? (
-            <button className="sm" onClick={() => setCancelling(true)}>Cancel subscription</button>
+            <button className="sm" onClick={() => setCancelling(true)}>{t("copy.portal.subscription.cancel_button")}</button>
           ) : (
             <div className="stack">
               {/* Stated before the button, not after: the consequences are the
                   decision, and finding them out afterwards is too late. */}
               <div className="notice notice-error">
-                <strong>What happens:</strong> you keep full access until{" "}
-                {new Date(subscription.periodEnd).toLocaleDateString("en-IN")}. After
-                that your workspace becomes <strong>read-only</strong> — you can
-                still read candidates, transcripts and reports, but not run new
-                interviews. <strong>30 days later the data is deleted</strong> and
-                cannot be recovered.
+                {rich("copy.portal.subscription.cancel_warning", {
+                  date: new Date(subscription.periodEnd).toLocaleDateString("en-IN"),
+                  days: data.retentionDays ?? 30,
+                })}
               </div>
 
               <label>
-                <span>Why are you leaving?</span>
+                <span>{t("copy.portal.subscription.cancel_reason_label")}</span>
                 <select value={cancelReason} onChange={(e) => setCancelReason(e.target.value)}>
-                  <option value="too_expensive">Too expensive</option>
-                  <option value="not_enough_hiring">Not hiring enough to justify it</option>
-                  <option value="missing_features">Missing features we need</option>
-                  <option value="quality">Interview quality did not meet our bar</option>
-                  <option value="switched">Moved to another product</option>
-                  <option value="other">Something else</option>
+                  <option value="too_expensive">{t("copy.portal.subscription.cancel_reason.too_expensive")}</option>
+                  <option value="not_enough_hiring">{t("copy.portal.subscription.cancel_reason.not_enough_hiring")}</option>
+                  <option value="missing_features">{t("copy.portal.subscription.cancel_reason.missing_features")}</option>
+                  <option value="quality">{t("copy.portal.subscription.cancel_reason.quality")}</option>
+                  <option value="switched">{t("copy.portal.subscription.cancel_reason.switched")}</option>
+                  <option value="other">{t("copy.portal.subscription.cancel_reason.other")}</option>
                 </select>
               </label>
 
               <label>
-                <span>Anything else? (optional)</span>
+                <span>{t("copy.portal.subscription.cancel_comment_label")}</span>
                 <textarea rows={3} value={cancelComment} onChange={(e) => setCancelComment(e.target.value)} />
               </label>
 
               <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
-                <button className="sm" onClick={() => setCancelling(false)}>Keep it</button>
+                <button className="sm" onClick={() => setCancelling(false)}>{t("copy.portal.subscription.cancel_keep")}</button>
                 <button
                   className="sm danger"
                   disabled={busy}
@@ -432,11 +579,11 @@ export default function SubscriptionPage({ params }: { params: { tenant: string 
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ reason: cancelReason, comment: cancelComment || undefined }),
                       },
-                      "Your subscription will end at the close of this period."
+                      t("copy.portal.subscription.cancel_done")
                     )
                   }
                 >
-                  Confirm cancellation
+                  {t("copy.portal.subscription.cancel_confirm")}
                 </button>
               </div>
             </div>

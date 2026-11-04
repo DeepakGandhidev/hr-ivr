@@ -27,7 +27,10 @@ export async function verifyOutreachGate(
 ): Promise<{
   shortlist: { id: string; job: { title: string } };
   approval: { id: string; snapshot: Array<{ candidateId: string }> };
-  items: Array<{ candidateId: string; candidate: { id: string; email: string | null; name: string | null } }>;
+  items: Array<{
+    candidateId: string;
+    candidate: { id: string; email: string | null; name: string | null; phoneE164: string | null; whatsappOptIn: boolean };
+  }>;
 }> {
   const shortlist = await tx.shortlist.findUnique({
     where: { id: shortlistId },

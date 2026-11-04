@@ -3,7 +3,9 @@ import { SarvamSTT } from '../audio/stt.js';
 import { createTTS } from '../audio/tts.js';
 import { STATES, TERMINAL, isVerified } from './states.js';
 import { billableMinutes, isBillableCall } from '@pratibha/shared';
+import { setting, settingText } from '@pratibha/shared/settings-runtime';
 import { makeDisclosure } from './screening.js';
+import { aiStep } from './toolExecutor.js';
 import { toSpeech, splitSentences } from '../utils/speech.js';
 import { truncateToHeard } from './history.js';
 import {
@@ -12,19 +14,28 @@ import {
   updateInterviewCall,
   incrementInterviewUsage,
   recordUnknownCall,
+  activePromptBlocks,
 } from '../db/index.js';
 import { isTenantPaused } from './tenantStatus.js';
+import { notifyQuotaIfLow } from '../notify/quotaWarning.js';
 
 /**
- * How far past its budget an interview may run before it is ended for it.
+ * A call's timing limits, read from the platform settings when it starts and
+ * kept for its length (the panel promises changes apply from the next call).
  *
- * Generous on purpose: cutting someone off mid-sentence to save ninety seconds
- * is a worse outcome than a slightly long call, and the prompt has already been
- * asking it to wrap up for a while by this point.
+ * The overrun grace is how far past its budget an interview may run before it
+ * is ended for it. Generous on purpose (two minutes by default): cutting
+ * someone off mid-sentence to save ninety seconds is a worse outcome than a
+ * slightly long call, and the prompt has already been asking it to wrap up for
+ * a while by this point.
  */
-const OVERRUN_GRACE_MS = 2 * 60 * 1000;
-
-const IDLE_HANGUP_MS = 45_000;
+export function callTiming() {
+  return {
+    idleHangupMs: setting('calls.idle_hangup_seconds') * 1000,
+    overrunGraceMs: setting('calls.overrun_grace_seconds') * 1000,
+    drainMs: setting('calls.drain_seconds') * 1000,
+  };
+}
 
 /**
  * One inbound call, start to finish.
@@ -41,6 +52,7 @@ export class CallSession {
     this.config = config;
     this.logger = logger;
     this.analyst = analyst;
+    this.timing = callTiming();
 
     this.vad = new VoiceActivityDetector(config.vad);
     this.stt = stt ?? new SarvamSTT(config, logger);
@@ -105,12 +117,25 @@ export class CallSession {
       // prompt nudges it to wrap up as the deadline nears; this ends the call if
       // it talks past that anyway, so an interview cannot run indefinitely.
       const deadline = session.deadlineAt;
-      if (deadline && !session.ended && Date.now() > deadline + OVERRUN_GRACE_MS) {
+      if (deadline && !session.ended && Date.now() > deadline + this.timing.overrunGraceMs) {
         this.#forceWrapUp();
         return;
       }
-      if (Date.now() - this.lastVoiceAt > IDLE_HANGUP_MS) this.finalise(TERMINAL.ABANDONED);
+      if (Date.now() - this.lastVoiceAt > this.timing.idleHangupMs) this.finalise(TERMINAL.ABANDONED);
     }, 5000);
+
+    // Listen-only (admin panel): for a verification call that reads out a
+    // code. Speaking would talk over the robot voice and garble the digits the
+    // speech recogniser hears, so the agent says nothing at all and only
+    // records what it hears; the call ends when the caller hangs up or goes
+    // quiet. Nothing is matched, interviewed or billed.
+    if (setting('calls.listen_only')) {
+      session.listenOnly = true;
+      session.setState(STATES.CLOSE);
+      session.transcript?.record('listen_only', { callerNumber: session.callerNumber ?? null });
+      this.logger.info({ sessionId: session.id, callerNumber: session.callerNumber ?? null }, 'Listen-only call: answering silently');
+      return;
+    }
 
     // A workspace an admin has suspended (or is deleting) takes no interviews:
     // the caller hears a polite refusal, nothing is recorded against the
@@ -124,7 +149,7 @@ export class CallSession {
       };
       session.setState(STATES.CLOSE);
       session.finish(TERMINAL.UNKNOWN_CALLER);
-      await this.#say(PAUSED_REFUSAL);
+      await this.#say(pausedRefusal());
       return;
     }
 
@@ -139,7 +164,7 @@ export class CallSession {
       await this.#ensureInterviewCall(session);
       session.setState(STATES.CLOSE);
       session.finish(TERMINAL.ALREADY_INTERVIEWED);
-      await this.#say("We already have a completed interview on file for this role. Thank you for calling, and the team will be in touch by email if needed.");
+      await this.#say(settingText('scripts.already_interviewed', "We already have a completed interview on file for this role. Thank you for calling, and the team will be in touch by email if needed."));
       return;
     }
 
@@ -151,13 +176,23 @@ export class CallSession {
       }
       session.setState(STATES.CLOSE);
       session.finish(TERMINAL.OUT_OF_WINDOW);
-      await this.#say("Thanks for calling. Our interview lines are currently closed. Please call back during the scheduled call window.");
+      await this.#say(settingText('scripts.window_closed', "Thanks for calling. Our interview lines are currently closed. Please call back during the scheduled call window."));
       return;
     }
 
     // Knowing who called is what matters, not whether a recruiter has approved
     // them: applying to the role is the qualification. Routing on `approved`
     // sent every ordinary applicant down the unrecognised path.
+    // The prompt is assembled from the active block library (I10), which an
+    // unrecognised caller needs as much as a recognised one. Loaded alongside
+    // the greeting rather than ahead of it, and awaited before the first turn.
+    const blocksReady = session.promptBlocks || lookup?.promptBlocks
+      ? Promise.resolve(lookup?.promptBlocks ?? session.promptBlocks)
+      : activePromptBlocks().catch(err => {
+        this.logger.error({ err: err.message }, 'Prompt block library failed to load');
+        return null;
+      });
+
     if (lookup?.candidate) {
       this.#attachLookup(session, lookup);
       session.recognised = true;
@@ -182,6 +217,8 @@ export class CallSession {
     await this.#say(disclosure, { isDisclosure: true });
     session.history.push({ role: 'assistant', content: disclosure });
 
+    session.promptBlocks = (await blocksReady) ?? session.promptBlocks ?? null;
+
     // Kick off the first model turn so it asks the right opening question
     // (language choice, or email if the caller was not recognised).
     if (!session.ended) {
@@ -204,6 +241,8 @@ export class CallSession {
     session.tenant = lookup.tenant;
     session.latestApprovedJd = lookup.latestApprovedJd;
     session.interviewProtocol = lookup.interviewProtocol;
+    session.screeningGaps = lookup.screeningGaps ?? [];
+    if (lookup.promptBlocks) session.promptBlocks = lookup.promptBlocks;
     session.approved = lookup.approved;
     session.alreadyInterviewed = lookup.hasCompleted;
     session.criteria = deriveCriteria(lookup.job);
@@ -285,6 +324,12 @@ export class CallSession {
     this.turnStartedAt = Date.now();
     this.turnAudioReported = false;
     this.session.transcript?.record('caller', { text: utterance, state: this.session.state });
+
+    // Listen-only: write it down, plainly, and never reply.
+    if (this.session.listenOnly) {
+      this.logger.info({ sessionId: this.session.id, heard: utterance }, 'Listen-only heard');
+      return;
+    }
 
     this.pending.push(utterance);
     this.#pump();
@@ -477,14 +522,15 @@ export class CallSession {
     session.setState(STATES.CLOSE);
     session.finish(TERMINAL.COMPLETED);
 
-    await this.#say(
+    await this.#say(settingText(
+      'scripts.time_up',
       "That's all the time we have for the interview. Thank you for talking me through your experience — the team will review this and get back to you by email."
-    );
+    ));
     await this.#drainThenHangUp();
   }
 
   async #drainThenHangUp() {
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + this.timing.drainMs;
     while (this.plivo.queuedMs > 0 && Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 200));
     }
@@ -494,7 +540,10 @@ export class CallSession {
   async #fail(reason) {
     const { session } = this;
     session.transcript?.record('technical_failure', { reason });
-    await this.#say("I'm sorry, I'm having trouble on my end. Please call back, and I'll flag this for the team.").catch(() => {});
+    await this.#say(settingText(
+      'scripts.technical_failure',
+      "I'm sorry, I'm having trouble on my end. Please call back, and I'll flag this for the team."
+    )).catch(() => {});
     session.finish(TERMINAL.TECHNICAL_FAILURE);
     await this.#drainThenHangUp();
   }
@@ -548,6 +597,8 @@ export class CallSession {
         llmCostUsd,
         ttsCostUsd: session.ttsCostUsd ?? 0,
         sttCostUsd: session.sttCostUsd ?? 0,
+        ...(session.practicalDetails ? { practicalDetails: session.practicalDetails } : {}),
+        ...(session.salaryMismatch ? { salaryMismatch: true } : {}),
       }).catch(err => this.logger.error({ err: err.message }, 'Final call patch failed'));
 
       // Explicitly NOT billed (2.8, 5 Stage 8): unknown callers, out-of-window
@@ -565,8 +616,14 @@ export class CallSession {
       });
 
       if (billable) {
-        await incrementInterviewUsage(session.tenant.id, minutes).catch(err =>
-          this.logger.error({ err: err.message }, 'Interview usage increment failed'));
+        const meter = await incrementInterviewUsage(session.tenant.id, minutes).catch(err => {
+          this.logger.error({ err: err.message }, 'Interview usage increment failed');
+          return null;
+        });
+        // Minutes running low or run out, judged on the meter as it now
+        // stands. Not awaited, so finishing the call and the analysis never
+        // wait on mail; it never throws.
+        if (meter) void notifyQuotaIfLow(meter, { logger: this.logger });
       } else {
         this.logger.info({
           sessionId: session.id,
@@ -622,6 +679,11 @@ export class CallSession {
 export const PAUSED_REFUSAL =
   "Thank you for calling. Interviews for this role are paused at the moment, so we can't go ahead today. The team will be in touch by email.";
 
+/** The refusal as configured now (scripts.paused), never empty. */
+export function pausedRefusal() {
+  return settingText('scripts.paused', PAUSED_REFUSAL);
+}
+
 export function isAbortError(err) {
   const name = err?.name ?? '';
   return name === 'AbortError' || name === 'APIUserAbortError' || err?.code === 'ABORT_ERR';
@@ -630,18 +692,20 @@ export function isAbortError(err) {
 export function deriveCriteria(job) {
   const mustHaves = Array.isArray(job?.mustHaves) ? job.mustHaves : [];
   const goodToHaves = Array.isArray(job?.goodToHaves) ? job.goodToHaves : [];
+  const mustWeight = setting('screening.must_have_weight');
+  const niceWeight = setting('screening.nice_to_have_weight');
   return [
     ...mustHaves.map((text, i) => ({
       id: i + 1,
       criterion: text,
-      weight: 5,
-      evaluation_guidance: 'Must-have for this role.'
+      weight: mustWeight,
+      evaluation_guidance: aiStep('ai_steps.criteria.must_have_guidance')
     })),
     ...goodToHaves.map((text, i) => ({
       id: mustHaves.length + i + 1,
       criterion: text,
-      weight: 3,
-      evaluation_guidance: 'Nice-to-have for this role.'
+      weight: niceWeight,
+      evaluation_guidance: aiStep('ai_steps.criteria.nice_to_have_guidance')
     }))
   ];
 }

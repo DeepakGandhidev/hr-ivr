@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { SETTINGS_BY_KEY } from "@pratibha/shared/settings-registry";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -48,7 +49,10 @@ describe("JD editing", () => {
 
   it("still reports that a live posting needs republishing", () => {
     expect(jobRoute).toContain("requiresRepublish: existing.posts.length > 0");
-    expect(editPage).toContain("The job description has changed");
+    // The wording is admin-editable text now: the page must show the notice,
+    // and the shipped wording must still say so.
+    expect(editPage).toContain('rich("copy.portal.jobs.edit_jd_changed")');
+    expect(SETTINGS_BY_KEY["copy.portal.jobs.edit_jd_changed"]?.default).toContain("The job description has changed");
   });
 
   /**

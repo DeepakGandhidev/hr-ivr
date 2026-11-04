@@ -1,4 +1,4 @@
-import { MAX_CV_FILE_BYTES, ValidationError } from "@pratibha/shared";
+import { maxCvFileBytes, ValidationError } from "@pratibha/shared";
 import { upsertCandidate } from "@pratibha/worker/src/ingestion/createCandidate.js";
 import { normalizePhoneE164, parseCvText } from "@pratibha/worker/src/ingestion/parser.js";
 import type { TenantTransactionClient } from "@/lib/authz";
@@ -77,11 +77,12 @@ export async function ingestCvFile(
     if (file.size === 0) {
       return { filename, status: "failed", error: "File is empty" };
     }
-    if (file.size > MAX_CV_FILE_BYTES) {
+    const maxBytes = maxCvFileBytes();
+    if (file.size > maxBytes) {
       return {
         filename,
         status: "failed",
-        error: `File is larger than ${Math.round(MAX_CV_FILE_BYTES / (1024 * 1024))}MB`,
+        error: `File is larger than ${Math.round(maxBytes / (1024 * 1024))}MB`,
       };
     }
 

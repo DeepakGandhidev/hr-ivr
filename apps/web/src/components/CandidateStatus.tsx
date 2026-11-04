@@ -1,11 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import {
-  CANDIDATE_STATUSES,
-  CANDIDATE_STATUS_LABELS,
-  type CandidateStatus,
-} from "@pratibha/shared";
+import { CANDIDATE_STATUSES, type CandidateStatus } from "@pratibha/shared";
+import { useStatusLabel } from "@/lib/copy-client";
 
 /**
  * Which badge each status wears.
@@ -28,8 +25,9 @@ const BADGE_CLASS: Record<CandidateStatus, string> = {
 };
 
 export function CandidateStatusBadge({ status }: { status: CandidateStatus }) {
+  const label = useStatusLabel();
   return (
-    <span className={`badge ${BADGE_CLASS[status]}`}>{CANDIDATE_STATUS_LABELS[status]}</span>
+    <span className={`badge ${BADGE_CLASS[status]}`}>{label(status)}</span>
   );
 }
 
@@ -55,6 +53,7 @@ export function CandidateStatusPicker({
    *  whole record is reloaded rather than the badge patched in isolation. */
   onChanged: () => void | Promise<void>;
 }) {
+  const label = useStatusLabel();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -98,7 +97,7 @@ export function CandidateStatusPicker({
       >
         {CANDIDATE_STATUSES.map((s) => (
           <option key={s} value={s}>
-            {CANDIDATE_STATUS_LABELS[s]}
+            {label(s)}
           </option>
         ))}
       </select>

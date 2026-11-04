@@ -7,6 +7,7 @@ import Markdown, { sentencesOf } from "@/components/Markdown";
 import ScreeningDetail, { CheckIcon } from "@/components/ScreeningDetail";
 import Time from "@/components/Time";
 import { plural } from "@/lib/format";
+import { useCopy } from "@/lib/copy-client";
 
 interface Screening {
   id: string;
@@ -84,6 +85,7 @@ const isActive = (item: ShortlistItem) => !item.removedBy && item.finalState !==
  * endpoint as always — which refuses anyone outside the approval.
  */
 export default function ShortlistPage({ params }: { params: { tenant: string; id: string } }) {
+  const t = useCopy();
   const { tenant, id } = params;
   const { summary, error: summaryError, refresh } = useJobSummary();
   const [shortlists, setShortlists] = useState<Shortlist[] | null>(null);
@@ -216,8 +218,8 @@ export default function ShortlistPage({ params }: { params: { tenant: string; id
   return (
     <div className="jm">
       <JobTabHeader
-        title="Shortlist"
-        intro="Approving the shortlist is what lets these candidates be interviewed. Until then, Pratibha refuses their call."
+        title={t("copy.portal.job.tab_shortlist")}
+        intro={t("copy.portal.job.shortlist.intro")}
       />
       <JobTabs active="shortlist" />
 
@@ -235,9 +237,9 @@ export default function ShortlistPage({ params }: { params: { tenant: string; id
         <section className="jm-card pending-card" aria-labelledby="pending-title">
           <div className="card-title-row">
             <h2 id="pending-title" className="card-title">
-              Waiting for your approval · {plural(pendingItems.length, "candidate")}
+              {t("copy.portal.job.shortlist.pending_heading", { count: plural(pendingItems.length, "candidate") })}
             </h2>
-            <span className="chip chip-amber">Not approved yet</span>
+            <span className="chip chip-amber">{t("copy.portal.job.shortlist.not_approved_chip")}</span>
           </div>
 
           <ul className="pending-list">
@@ -281,10 +283,10 @@ export default function ShortlistPage({ params }: { params: { tenant: string; id
                   </div>
                   <Evidence screening={latest} />
                   {!c.email && (
-                    <p className="row-warning">No email address, so no invitation can be sent to them.</p>
+                    <p className="row-warning">{t("copy.portal.job.shortlist.no_email_warning")}</p>
                   )}
                   {!c.phoneE164 && (
-                    <p className="row-warning">No phone number, so Pratibha cannot recognise their call yet.</p>
+                    <p className="row-warning">{t("copy.portal.job.shortlist.no_phone_warning")}</p>
                   )}
                 </li>
               );
@@ -298,12 +300,14 @@ export default function ShortlistPage({ params }: { params: { tenant: string; id
               className="btn-ink"
               onClick={() => approve(pending)}
               disabled={approving || !perms?.canApproveShortlist}
-              title={perms && !perms.canApproveShortlist ? "Only reviewers, admins and owners can approve" : undefined}
+              title={perms && !perms.canApproveShortlist ? t("copy.portal.job.shortlist.approve_not_allowed") : undefined}
             >
-              {approving ? "Approving…" : `Approve shortlist · ${plural(pendingItems.length, "candidate")}`}
+              {approving
+                ? t("copy.portal.job.shortlist.approving")
+                : t("copy.portal.job.shortlist.approve_button", { count: plural(pendingItems.length, "candidate") })}
             </button>
             <Link href={`/${tenant}/jobs/${id}/candidates`} className="link-strong">
-              Add more from Candidates
+              {t("copy.portal.job.shortlist.add_more")}
             </Link>
           </div>
 
@@ -313,8 +317,8 @@ export default function ShortlistPage({ params }: { params: { tenant: string; id
       ) : approved.length > 0 ? (
         <div className="jm-card quiet-card">
           <p>
-            Nobody is waiting for approval. Screening adds the candidates it suggests here.{" "}
-            <Link href={`/${tenant}/jobs/${id}/candidates`}>Go to Candidates</Link>
+            {t("copy.portal.job.shortlist.none_waiting")}{" "}
+            <Link href={`/${tenant}/jobs/${id}/candidates`}>{t("copy.portal.job.shortlist.go_to_candidates")}</Link>
           </p>
         </div>
       ) : (
@@ -327,7 +331,7 @@ export default function ShortlistPage({ params }: { params: { tenant: string; id
       {approved.length > 0 && (
         <section aria-labelledby="approved-title">
           <h2 id="approved-title" className="section-title">
-            Previously approved
+            {t("copy.portal.job.shortlist.approved_heading")}
           </h2>
           <ul className="approved-list">
             {approved.map((s) => (
@@ -349,7 +353,7 @@ export default function ShortlistPage({ params }: { params: { tenant: string; id
       {removedItems.length > 0 && (
         <section aria-labelledby="removed-title">
           <h2 id="removed-title" className="section-title">
-            Removed from this shortlist
+            {t("copy.portal.job.shortlist.removed_heading")}
           </h2>
           <ul className="approved-list">
             {removedItems.map((item) => {
@@ -545,16 +549,17 @@ function EmptyExplanation({
   candidates: JobCandidate[];
   threshold: number;
 }) {
+  const t = useCopy();
   const screened = candidates.filter((c) => c.screenings?.some(Boolean));
   const topScore = screened.reduce((max, c) => Math.max(max, c.screenings?.[0]?.score ?? 0), 0);
 
   if (candidates.length === 0) {
     return (
       <>
-        <h3>No candidates yet</h3>
-        <p>Add CVs to this job, then screen them to build a shortlist.</p>
+        <h3>{t("copy.portal.job.shortlist.empty_none_title")}</h3>
+        <p>{t("copy.portal.job.shortlist.empty_none_body")}</p>
         <Link href={`/${tenant}/jobs/${jobId}/candidates`} className="btn-ink" style={{ marginTop: 16 }}>
-          Add candidates
+          {t("copy.portal.job.shortlist.empty_none_button")}
         </Link>
       </>
     );
@@ -564,13 +569,12 @@ function EmptyExplanation({
     const n = candidates.length;
     return (
       <>
-        <h3>Nothing screened yet</h3>
+        <h3>{t("copy.portal.job.shortlist.empty_unscreened_title")}</h3>
         <p>
-          {plural(n, "candidate")} {n === 1 ? "is" : "are"} waiting. Screening is what scores them and puts anyone
-          above the threshold on this shortlist.
+          {t("copy.portal.job.shortlist.empty_unscreened_body", { waiting: `${plural(n, "candidate")} ${n === 1 ? "is" : "are"}` })}
         </p>
         <Link href={`/${tenant}/jobs/${jobId}/candidates`} className="btn-ink" style={{ marginTop: 16 }}>
-          Screen candidates
+          {t("copy.portal.job.shortlist.empty_unscreened_button")}
         </Link>
       </>
     );
@@ -578,18 +582,20 @@ function EmptyExplanation({
 
   return (
     <>
-      <h3>Everyone scored below the threshold</h3>
+      <h3>{t("copy.portal.job.shortlist.empty_below_title")}</h3>
       <p>
-        {screened.length === 1 ? "The screened candidate was" : `All ${screened.length} screened candidates were`} not
-        suggested. The best score was {topScore}, and the threshold is {threshold}, so nobody reached the shortlist.
-        Lower the job&apos;s threshold, or relax its must haves, and screen again.
+        {t("copy.portal.job.shortlist.empty_below_body", {
+          who: screened.length === 1 ? "The screened candidate was" : `All ${screened.length} screened candidates were`,
+          best: topScore,
+          threshold,
+        })}
       </p>
       <div className="jm-actions" style={{ justifyContent: "center", marginTop: 16 }}>
         <Link href={`/${tenant}/jobs/${jobId}/edit`} className="btn-ink">
-          Edit the job
+          {t("copy.portal.job.shortlist.empty_below_edit")}
         </Link>
         <Link href={`/${tenant}/jobs/${jobId}/candidates`} className="btn-line">
-          Review candidates
+          {t("copy.portal.job.shortlist.empty_below_review")}
         </Link>
       </div>
     </>

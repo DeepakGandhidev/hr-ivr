@@ -216,7 +216,7 @@ export async function unknownCallersThisWeek() {
 export async function funnelThisMonth(usage: { screenings: number; interviews: number }) {
   const { startOfMonth } = istBounds();
   const [applications, shortlisted, recommended] = await Promise.all([
-    db.candidate.count({ where: { createdAt: { gte: startOfMonth } } }),
+    db.candidate.count({ where: { createdAt: { gte: startOfMonth }, archivedAt: null, notApplicationAt: null } }),
     db.shortlistItem.count({ where: { createdAt: { gte: startOfMonth }, removedBy: null } }),
     db.assessmentReport.count({ where: { generatedAt: { gte: startOfMonth }, recommendation: { in: ["strong_yes", "yes"] } } }),
   ]);

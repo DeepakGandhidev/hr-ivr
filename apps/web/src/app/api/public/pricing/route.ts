@@ -1,3 +1,4 @@
+import { gstRatePercent } from "@pratibha/shared";
 import { NextResponse } from "next/server";
 import { currentPlans, currentTrial, livePacks, publicPack, publicPlan, trialAllowance } from "@/lib/pricing";
 
@@ -23,7 +24,7 @@ export async function GET() {
   return NextResponse.json(
     {
       currency: "INR",
-      taxNote: "Prices exclude GST at 18%.",
+      taxNote: `Prices exclude GST at ${gstRatePercent()}%.`,
       slashedPriceRule:
         "A slashed price shows struck through beside the sale price; the sale price is the only one ever charged or invoiced.",
       plans: plans.map(publicPlan),

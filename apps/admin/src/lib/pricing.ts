@@ -1,5 +1,5 @@
 import type { Plan, TopupPack, TrialConfig } from "@pratibha/prisma";
-import { AVERAGE_INTERVIEW_MINUTES } from "@pratibha/shared";
+import { averageInterviewMinutes } from "@pratibha/shared";
 import { db, type Db } from "@/lib/db";
 
 /**
@@ -55,6 +55,6 @@ export function limitsJson(p: Pick<Plan, "minutes" | "screenings" | "jobLimit">,
     screenings: p.screenings,
     roles: p.jobLimit,
     // Customers think in interviews; described at the average interview length.
-    interviews: Math.floor(p.minutes / AVERAGE_INTERVIEW_MINUTES),
+    interviews: Math.floor(p.minutes / averageInterviewMinutes()),
   };
 }

@@ -12,7 +12,11 @@ const LINKS = [
   { href: "/payments", label: "Payments" },
   { href: "/calls", label: "Calls" },
   { href: "/activity", label: "Activity" },
+  { href: "/email", label: "Email" },
+  { href: "/whatsapp", label: "WhatsApp" },
+  { href: "/website", label: "Website" },
   { href: "/settings", label: "Platform settings" },
+  { href: "/prompts", label: "AI prompts" },
   { href: "/team", label: "Admin team" },
 ];
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useCopy, type CopyFn } from "@/lib/copy-client";
 
 /**
  * The overview, rebuilt to the client's reference design.
@@ -107,11 +108,11 @@ interface Overview {
   };
 }
 
-function greeting(d = new Date()) {
+function greeting(t: CopyFn, d = new Date()) {
   const h = d.getHours();
-  if (h < 12) return "Good morning";
-  if (h < 17) return "Good afternoon";
-  return "Good evening";
+  if (h < 12) return t("copy.portal.overview.greeting_morning");
+  if (h < 17) return t("copy.portal.overview.greeting_afternoon");
+  return t("copy.portal.overview.greeting_evening");
 }
 
 const timeOf = (iso: string) =>
@@ -127,6 +128,7 @@ const LANGUAGES: Record<string, string> = { en: "English", hi: "Hindi", hinglish
 
 export default function OverviewPage({ params }: { params: { tenant: string } }) {
   const { tenant } = params;
+  const t = useCopy();
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -138,7 +140,7 @@ export default function OverviewPage({ params }: { params: { tenant: string } })
       const body = await res.json().catch(() => ({}));
       if (cancelled) return;
       if (!res.ok) {
-        setError(body.message || "Could not load your overview");
+        setError(body.message || t("copy.portal.overview.load_error"));
         return;
       }
       setData(body);
@@ -152,7 +154,7 @@ export default function OverviewPage({ params }: { params: { tenant: string } })
       cancelled = true;
       clearInterval(poll);
     };
-  }, [tenant]);
+  }, [tenant, t]);
 
   useEffect(() => {
     if (!data?.liveCall) return;
@@ -161,7 +163,7 @@ export default function OverviewPage({ params }: { params: { tenant: string } })
   }, [data?.liveCall]);
 
   if (error) return <div className="notice notice-error">{error}</div>;
-  if (!data) return <div className="card empty"><p className="muted">Loading your overview…</p></div>;
+  if (!data) return <div className="card empty"><p className="muted">{t("copy.portal.overview.loading")}</p></div>;
 
   const { funnel, stats } = data;
   const openJobs = data.jobs.filter((j) => j.status === "open");
@@ -176,28 +178,30 @@ export default function OverviewPage({ params }: { params: { tenant: string } })
   const pct = (n: number) => `${Math.max(n > 0 ? 2 : 0, (n / widest) * 100)}%`;
 
   const stages: Array<{ k: number; t: string; gate?: boolean }> = [
-    { k: funnel.applications, t: "Applications" },
-    { k: funnel.screened, t: "Screened" },
-    { k: funnel.shortlisted, t: "Shortlisted" },
-    { k: funnel.approved, t: "Approved by you", gate: true },
-    { k: funnel.interviewed, t: "Interviewed" },
-    { k: funnel.recommended, t: "Recommended" },
+    { k: funnel.applications, t: t("copy.portal.overview.stage_applications") },
+    { k: funnel.screened, t: t("copy.portal.overview.stage_screened") },
+    { k: funnel.shortlisted, t: t("copy.portal.overview.stage_shortlisted") },
+    { k: funnel.approved, t: t("copy.portal.overview.stage_approved"), gate: true },
+    { k: funnel.interviewed, t: t("copy.portal.overview.stage_interviewed") },
+    { k: funnel.recommended, t: t("copy.portal.overview.stage_recommended") },
   ];
 
   return (
     <div className="dash">
       <div className="dash-top">
         <div>
-          <h1>{greeting()}</h1>
+          <h1>{greeting(t)}</h1>
           <p className="sub">
             {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}
             {" · "}
-            Pratibha has read {stats.candidates} {stats.candidates === 1 ? "application" : "applications"} and
-            completed {stats.interviewsCompleted} {stats.interviewsCompleted === 1 ? "interview" : "interviews"}.
+            {t("copy.portal.overview.summary", {
+              applications: `${stats.candidates} ${stats.candidates === 1 ? "application" : "applications"}`,
+              interviews: `${stats.interviewsCompleted} ${stats.interviewsCompleted === 1 ? "interview" : "interviews"}`,
+            })}
           </p>
         </div>
         <div className="row">
-          <Link href={`/${tenant}/jobs/new`} className="btn btn-saffron">+ New role</Link>
+          <Link href={`/${tenant}/jobs/new`} className="btn btn-saffron">{t("copy.portal.overview.new_role")}</Link>
         </div>
       </div>
 
@@ -205,7 +209,7 @@ export default function OverviewPage({ params }: { params: { tenant: string } })
         <div className="live">
           <span className="pulse" />
           <div>
-            <b>On a call with {data.liveCall.candidate.name ?? "a candidate"}</b>{" "}
+            <b>{t("copy.portal.overview.live_call", { name: data.liveCall.candidate.name ?? "a candidate" })}</b>{" "}
             <span className="live-sub">
               · {data.liveCall.candidate.job.title} · {elapsed(data.liveCall.startedAt, now)} elapsed
               {data.liveCall.language ? ` · ${LANGUAGES[data.liveCall.language] ?? data.liveCall.language}` : ""}
@@ -225,22 +229,22 @@ export default function OverviewPage({ params }: { params: { tenant: string } })
       )}
 
       <div className="sec-h">
-        <h2>Needs you</h2>
+        <h2>{t("copy.portal.overview.needs_heading")}</h2>
         <span style={{ fontSize: 13, color: "var(--brand-muted)" }}>
-          Pratibha does the work — these are your decisions
+          {t("copy.portal.overview.needs_sub")}
         </span>
       </div>
       <div className="needs">
         <div className={`need${stats.awaitingApproval > 0 ? " hot" : ""}`}>
           <span className="k">{stats.awaitingApproval}</span>
-          <span className="t">Shortlists awaiting approval</span>
+          <span className="t">{t("copy.portal.overview.approvals_title")}</span>
           <span className="d">
             {stats.awaitingApproval > 0
-              ? "Nobody is contacted until you say so."
-              : "Nothing waiting on you here."}
+              ? t("copy.portal.overview.approvals_pending")
+              : t("copy.portal.overview.approvals_none")}
           </span>
           {stats.awaitingApproval > 0 && (
-            <Link href={`/${tenant}/pipeline`} className="btn btn-saffron btn-sm">Review shortlists</Link>
+            <Link href={`/${tenant}/pipeline`} className="btn btn-saffron btn-sm">{t("copy.portal.overview.approvals_button")}</Link>
           )}
         </div>
 
@@ -248,46 +252,49 @@ export default function OverviewPage({ params }: { params: { tenant: string } })
           <span className="k">{pendingReports}</span>
           {/* Deliberately "recent", not "unread": nothing records who has read
               what, and a count that claims otherwise would be a lie. */}
-          <span className="t">Recent interview reports</span>
+          <span className="t">{t("copy.portal.overview.reports_title")}</span>
           <span className="d">
             {data.recentReports.length > 0
               ? data.recentReports
                   .slice(0, 2)
                   .map((r) => `${r.interviewCall.candidate.name ?? "Candidate"} scored ${r.overallScore}`)
                   .join(", ")
-              : "No interview reports yet."}
+              : t("copy.portal.overview.reports_none")}
           </span>
           {pendingReports > 0 && (
-            <Link href={`/${tenant}/pipeline`} className="btn btn-ghost btn-sm">Read reports</Link>
+            <Link href={`/${tenant}/pipeline`} className="btn btn-ghost btn-sm">{t("copy.portal.overview.reports_button")}</Link>
           )}
         </div>
 
         <div className={`need${data.blockedCandidates.length > 0 ? " hot" : ""}`}>
           <span className="k">{data.blockedCandidates.length}</span>
           <span className="t">
-            {data.blockedCandidates.length === 1 ? "Candidate without a phone number" : "Candidates without a phone number"}
+            {data.blockedCandidates.length === 1 ? t("copy.portal.overview.no_phone_title_one") : t("copy.portal.overview.no_phone_title_many")}
           </span>
           <span className="d">
             {data.blockedCandidates.length > 0
-              ? `${data.blockedCandidates[0].name ?? "A candidate"} applied for ${data.blockedCandidates[0].job.title} — Pratibha can't invite them to call.`
-              : "Everyone we have can be reached."}
+              ? t("copy.portal.overview.no_phone_detail", {
+                  name: data.blockedCandidates[0].name ?? "A candidate",
+                  job: data.blockedCandidates[0].job.title,
+                })
+              : t("copy.portal.overview.no_phone_none")}
           </span>
           {data.blockedCandidates.length > 0 && (
             <Link
               href={`/${tenant}/jobs/${data.blockedCandidates[0].jobId}/candidates`}
               className="btn btn-ghost btn-sm"
             >
-              Add number
+              {t("copy.portal.overview.no_phone_button")}
             </Link>
           )}
         </div>
 
         <div className={`need${brokenMailboxes.length ? " hot" : " ok"}`}>
-          <span className="k">{brokenMailboxes.length ? brokenMailboxes.length : "All clear"}</span>
-          <span className="t">Mailbox &amp; postings</span>
+          <span className="k">{brokenMailboxes.length ? brokenMailboxes.length : t("copy.portal.overview.mailbox_all_clear")}</span>
+          <span className="t">{t("copy.portal.overview.mailbox_title")}</span>
           <span className="d">
             {data.mailboxes.length === 0
-              ? "No mailbox connected — applications can only be added by hand."
+              ? t("copy.portal.overview.mailbox_none")
               : brokenMailboxes.length
                 ? `${brokenMailboxes[0].address}: ${brokenMailboxes[0].errorDetail ?? "not connected"}`
                 : `${healthyMailboxes[0]?.address} checked ${
@@ -297,14 +304,14 @@ export default function OverviewPage({ params }: { params: { tenant: string } })
                   }. ${openJobs.length} ${openJobs.length === 1 ? "role" : "roles"} open.`}
           </span>
           {(brokenMailboxes.length > 0 || data.mailboxes.length === 0) && (
-            <Link href={`/${tenant}/settings/email`} className="btn btn-ghost btn-sm">Open mailbox settings</Link>
+            <Link href={`/${tenant}/settings/email`} className="btn btn-ghost btn-sm">{t("copy.portal.overview.mailbox_button")}</Link>
           )}
         </div>
       </div>
 
       <div className="funnel">
         <div className="sec-h" style={{ margin: 0 }}>
-          <h2>This month&rsquo;s pipeline</h2>
+          <h2>{t("copy.portal.overview.funnel_heading")}</h2>
           <span style={{ fontSize: 13, color: "var(--brand-muted)" }}>
             Across {openJobs.length} open {openJobs.length === 1 ? "role" : "roles"}
           </span>
@@ -323,11 +330,11 @@ export default function OverviewPage({ params }: { params: { tenant: string } })
       <div className="dash-grid">
         <div className="card">
           <div className="sec-h">
-            <h2 style={{ margin: 0 }}>Open roles</h2>
+            <h2 style={{ margin: 0 }}>{t("copy.portal.overview.open_roles_heading")}</h2>
             <Link href={`/${tenant}/jobs`}>View all</Link>
           </div>
           {data.jobs.length === 0 ? (
-            <p className="muted">No roles yet. <Link href={`/${tenant}/jobs/new`}>Create one</Link>.</p>
+            <p className="muted">{t("copy.portal.overview.open_roles_empty")} <Link href={`/${tenant}/jobs/new`}>{t("copy.portal.overview.open_roles_create")}</Link>.</p>
           ) : (
             <div className="table-wrap">
               <table>
@@ -361,9 +368,9 @@ export default function OverviewPage({ params }: { params: { tenant: string } })
         </div>
 
         <div className="card">
-          <h2>What Pratibha did today</h2>
+          <h2>{t("copy.portal.overview.activity_heading")}</h2>
           {data.activity.length === 0 ? (
-            <p className="muted">Nothing yet today.</p>
+            <p className="muted">{t("copy.portal.overview.activity_empty")}</p>
           ) : (
             <div className="feed">
               {data.activity.map((e, i) => (
@@ -392,11 +399,11 @@ export default function OverviewPage({ params }: { params: { tenant: string } })
 
       <div className="card">
         <div className="sec-h">
-          <h2 style={{ margin: 0 }}>Latest applications</h2>
+          <h2 style={{ margin: 0 }}>{t("copy.portal.overview.latest_heading")}</h2>
           <Link href={`/${tenant}/pipeline`}>All {stats.candidates}</Link>
         </div>
         {data.recentCandidates.length === 0 ? (
-          <p className="muted">No applications yet.</p>
+          <p className="muted">{t("copy.portal.overview.latest_empty")}</p>
         ) : (
           <div className="table-wrap">
             <table>

@@ -10,8 +10,14 @@ const PUBLIC_PATHS = [
   "/api/auth",
   "/api/public/",
   "/reset-password",
+  "/forgot-password",
   "/j/",
+  "/careers/",
   "/webhook/",
+  // Saarthi chat: the loader the marketing site includes, and the page the
+  // mobile app opens. Neither may redirect to a login.
+  "/saarthi.js",
+  "/app-chat.html",
   "/_next/",
   "/favicon.ico",
 ];

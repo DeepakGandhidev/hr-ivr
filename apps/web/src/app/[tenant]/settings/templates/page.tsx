@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useCopy } from "@/lib/copy-client";
 
 type TemplateType = "interview_invite" | "rejection" | "reminder";
 
@@ -69,6 +70,7 @@ const PLACEHOLDER_TOKENS = [
 ];
 
 export default function TemplatesPage({ params }: { params: { tenant: string } }) {
+  const t = useCopy();
   const { tenant } = params;
   const [templates, setTemplates] = useState<Partial<Record<TemplateType, OutreachTemplate>>>({});
   const [saving, setSaving] = useState<TemplateType | null>(null);
@@ -127,8 +129,8 @@ export default function TemplatesPage({ params }: { params: { tenant: string } }
   return (
     <div className="mx-auto w-full max-w-7xl">
       <div className="page-head">
-        <h1>Outreach templates</h1>
-        <p className="muted">The emails Pratibha sends candidates at each stage. Edit and save each one independently.</p>
+        <h1>{t("copy.portal.settings.templates.title")}</h1>
+        <p className="muted">{t("copy.portal.settings.templates.intro")}</p>
       </div>
 
       {error && (

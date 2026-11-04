@@ -105,6 +105,9 @@ async function saveToSentFolder(
     socketTimeout: 20_000,
     logger: false,
   });
+  // A dead socket arrives as an 'error' event; unhandled, it would crash the
+  // web server. The awaited call below still rejects and is reported.
+  client.on("error", () => {});
 
   try {
     await client.connect();

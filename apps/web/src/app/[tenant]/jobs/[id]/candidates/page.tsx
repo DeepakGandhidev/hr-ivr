@@ -13,7 +13,8 @@ import { JobShellError, JobTabHeader, JobTabs, useJobSummary, verdictLabel } fro
 import { firstLine } from "@/components/Markdown";
 import { useToast } from "@/components/Toast";
 import { plural, timeAgo } from "@/lib/format";
-import { CANDIDATE_STATUSES, CANDIDATE_STATUS_LABELS, type CandidateStatus } from "@pratibha/shared";
+import { CANDIDATE_STATUSES, type CandidateStatus } from "@pratibha/shared";
+import { useCopy, useStatusLabel } from "@/lib/copy-client";
 
 interface Screening {
   id: string;
@@ -64,7 +65,9 @@ const nameOf = (c: Candidate) => c.name || c.email || "Unnamed candidate";
  * screen without scrolling sideways.
  */
 export default function CandidatesPage({ params }: { params: { tenant: string; id: string } }) {
+  const t = useCopy();
   const { tenant, id } = params;
+  const statusLabel = useStatusLabel();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -237,8 +240,8 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
   return (
     <div className="jm">
       <JobTabHeader
-        title="Candidates"
-        intro="Screening scores each CV against the job's must haves. Anyone it suggests moves to the Shortlist tab for your approval."
+        title={t("copy.portal.job.tab_candidates")}
+        intro={t("copy.portal.job.candidates.intro")}
         actions={perms?.canAddCandidates ? <AddCandidates tenant={tenant} jobId={id} onAdded={reload} /> : undefined}
       />
       <JobTabs active="candidates" />
@@ -266,7 +269,7 @@ export default function CandidatesPage({ params }: { params: { tenant: string; i
             <option value="all">All</option>
             {CANDIDATE_STATUSES.map((s) => (
               <option key={s} value={s}>
-                {CANDIDATE_STATUS_LABELS[s]}
+                {statusLabel(s)}
               </option>
             ))}
           </select>
@@ -645,6 +648,7 @@ function MoveStageDialog({
   onClose: () => void;
   onDone: (label: string) => void;
 }) {
+  const statusLabel = useStatusLabel();
   const [status, setStatus] = useState<CandidateStatus>(candidate.status);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -661,7 +665,7 @@ function MoveStageDialog({
     });
     setBusy(false);
     if (!ok) return setError(String(data.message ?? "Could not change the stage"));
-    onDone(CANDIDATE_STATUS_LABELS[status]);
+    onDone(statusLabel(status));
   }
 
   return (
@@ -672,7 +676,7 @@ function MoveStageDialog({
           <select id="stage-select" value={status} onChange={(e) => setStatus(e.target.value as CandidateStatus)}>
             {CANDIDATE_STATUSES.map((s) => (
               <option key={s} value={s}>
-                {CANDIDATE_STATUS_LABELS[s]}
+                {statusLabel(s)}
               </option>
             ))}
           </select>

@@ -1,3 +1,4 @@
+import { planAllows } from "@/lib/plan-features";
 import { NextRequest } from "next/server";
 import { Action, NotFoundError } from "@pratibha/shared";
 import { withTenantAuth } from "@/lib/authz";
@@ -5,6 +6,8 @@ import { handleApi } from "@/lib/api-errors";
 import { outreachFromAddress, sendAsTenant, tenantLogoUrl } from "@/lib/email";
 import { defaultInterviewInviteVars, renderTemplate } from "@/lib/templates";
 import { validateSendInvitesBody, verifyOutreachGate } from "@/lib/gates";
+import { candidateMayGetWhatsApp, sendWhatsAppInBackground } from "@/lib/whatsapp";
+import type { OutgoingWhatsApp } from "@pratibha/shared/whatsapp";
 
 function generateReferenceCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -24,7 +27,10 @@ export async function POST(
     const body = await request.json();
     const input = validateSendInvitesBody(body);
 
-    return withTenantAuth(tenant, Action.outreachSend, async (ctx, tx) => {
+    // The WhatsApp invites, sent once the outreach rows are committed.
+    const whatsapp: OutgoingWhatsApp[] = [];
+
+    const result = await withTenantAuth(tenant, Action.outreachSend, async (ctx, tx) => {
       const { shortlist, approval, items } = await verifyOutreachGate(tx, id, input, {
         tenantId: ctx.tenant.id,
         userId: ctx.user.id,
@@ -59,7 +65,7 @@ export async function POST(
         where: { tenantId: ctx.tenant.id, status: "connected" },
         orderBy: { createdAt: "asc" },
       });
-      const fromAddress = outreachFromAddress(ctx.tenant.slug, ctx.tenant.name);
+      const fromAddress = outreachFromAddress(ctx.tenant.slug, ctx.tenant.name, planAllows(ctx.tenant, "white_label_emails"));
       const replyTo = connection?.address;
 
       // Looked up once for the whole batch rather than per candidate: it is the
@@ -117,9 +123,11 @@ export async function POST(
         const subject = renderTemplate(template.subject, vars);
         const body = renderTemplate(template.bodyMd, vars);
 
-        // Prefers the tenant's own mailbox; `fromAddress` is only used if we
-        // fall back to the shared provider.
+        // Prefers the tenant's own mailbox; `fromAddress` (its display name)
+        // is used when it goes from Pratibha's mailbox instead.
         const result = await sendAsTenant(connection, ctx.tenant, {
+          kind: "candidate_invite",
+          tenantId: ctx.tenant.id,
           to: candidate.email,
           subject,
           body,
@@ -144,9 +152,27 @@ export async function POST(
           outreachEmailId: outreachEmail.id,
           status: result.ok ? "sent" : `failed: ${result.error ?? "unknown"}`,
         });
+
+        // The same invite on WhatsApp, with the same reference code, to a
+        // candidate who opted in (or to everyone with a number, when the admin
+        // panel turns the opt-in rule off). Whatever the email did: a bounced
+        // address is exactly when the message matters. Once per approval, as
+        // the email is.
+        if (candidateMayGetWhatsApp(candidate)) {
+          whatsapp.push({
+            kind: "candidate_invite",
+            tenantId: ctx.tenant.id,
+            to: candidate.phoneE164!,
+            params: [candidate.name ?? "there", shortlist.job.title, ctx.tenant.name, pratibhaNumber, referenceCode],
+            dedupeKey: `wa_candidate_invite:${approval.id}:${candidate.id}`,
+          });
+        }
       }
 
       return { sent };
     });
+
+    sendWhatsAppInBackground(whatsapp);
+    return result;
   });
 }

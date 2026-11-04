@@ -11,6 +11,7 @@ import {
   topUps,
 } from "@/lib/billing";
 import { FUNNEL_WHERE } from "@/lib/job-insights";
+import { ACTIVE_CANDIDATE } from "@/lib/candidates";
 
 export const runtime = "nodejs";
 
@@ -148,14 +149,14 @@ export async function GET(
             slug: true,
             status: true,
             createdAt: true,
-            _count: { select: { candidates: true } },
+            _count: { select: { candidates: { where: ACTIVE_CANDIDATE } } },
           },
           orderBy: { createdAt: "desc" },
         }),
-        tx.candidate.count({ where: { tenantId } }),
+        tx.candidate.count({ where: { tenantId, ...ACTIVE_CANDIDATE } }),
         // A candidate nobody has screened is the actionable number: it is work
         // waiting, not work done.
-        tx.candidate.count({ where: { tenantId, screenings: { none: {} } } }),
+        tx.candidate.count({ where: { tenantId, ...ACTIVE_CANDIDATE, screenings: { none: {} } } }),
         // Screenings, shortlists and interview calls carry no tenant column of
         // their own; they inherit it through the candidate or job they belong
         // to, so the filter goes through the relation.
@@ -187,7 +188,7 @@ export async function GET(
           },
         }),
         tx.candidate.findMany({
-          where: { tenantId },
+          where: { tenantId, ...ACTIVE_CANDIDATE },
           select: {
             id: true,
             name: true,
@@ -231,7 +232,7 @@ export async function GET(
         // Pratibha cannot invite someone she has no number for, so these are
         // stuck until a human adds one.
         tx.candidate.findMany({
-          where: { tenantId, OR: [{ noPhone: true }, { phoneE164: null }] },
+          where: { tenantId, ...ACTIVE_CANDIDATE, OR: [{ noPhone: true }, { phoneE164: null }] },
           select: { id: true, name: true, jobId: true, job: { select: { title: true } } },
           take: 10,
         }),

@@ -3,15 +3,21 @@ import { Action, ValidationError, writeAuditLog } from "@pratibha/shared";
 import { authorizeTenant } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { createClient } from "@/lib/supabase/server";
+import { passwordMatches } from "@/lib/reauth";
 import { sendEmail } from "@/lib/email";
+import { passwordChangedEmail } from "@/lib/copy-emails";
+import { setting } from "@pratibha/shared/settings-runtime";
 import { z } from "zod";
 
 export const runtime = "nodejs";
 
-const passwordSchema = z.object({
-  currentPassword: z.string().min(1, "Enter your current password"),
-  newPassword: z.string().min(10, "Use at least 10 characters"),
-});
+/** Built per request: the minimum length is set in the admin panel (Security). */
+function passwordSchema(minLength: number) {
+  return z.object({
+    currentPassword: z.string().min(1, "Enter your current password"),
+    newPassword: z.string().min(minLength, `Use at least ${minLength} characters`),
+  });
+}
 
 /**
  * Change your own password.
@@ -33,7 +39,9 @@ export async function POST(
 ) {
   const { tenant } = params;
   return handleApi(async () => {
-    const parsed = passwordSchema.safeParse(await request.json().catch(() => null));
+    const parsed = passwordSchema(setting<number>("security.password_min_length")).safeParse(
+      await request.json().catch(() => null)
+    );
     if (!parsed.success) {
       throw new ValidationError("Invalid password change", parsed.error.flatten());
     }
@@ -41,15 +49,13 @@ export async function POST(
     const { ctx, tx } = await authorizeTenant(tenant, Action.candidateRead);
     const supabase = createClient();
 
-    // Re-authenticate. signInWithPassword is the only way to check the current
-    // password through GoTrue, and it is done against this user's own email so
-    // it cannot be used to probe anyone else's.
-    const { error: reauthError } = await supabase.auth.signInWithPassword({
-      email: ctx.user.email,
-      password: parsed.data.currentPassword,
-    });
+    // Re-authenticate against this user's own email, so it cannot be used to
+    // probe anyone else's. Checked on a throwaway client: signing in through
+    // the cookie client used to replace this browser's session with a new one
+    // and leave the old row behind (Batch 5, P01).
+    const reauthOk = await passwordMatches(ctx.user.email, parsed.data.currentPassword);
 
-    if (reauthError) {
+    if (!reauthOk) {
       // Deliberately not distinguishing "wrong password" from anything else in
       // the response, while still recording the attempt.
       await tx(async (db) => {
@@ -95,17 +101,8 @@ export async function POST(
 
     // After the change, never before: a failed notification must not stop a
     // password change that has already happened.
-    await sendEmail({
-      to: ctx.user.email,
-      subject: "Your Pratibha password was changed",
-      body:
-        `Hello${ctx.user.name ? ` ${ctx.user.name}` : ""},\n\n` +
-        `The password on your Pratibha account (${ctx.user.email}) was just changed, ` +
-        `and every other signed-in device was signed out.\n\n` +
-        `If this was you, there is nothing to do.\n\n` +
-        `If it was not, your account is at risk: reset your password immediately ` +
-        `and contact your workspace owner.\n`,
-    }).catch(() => {
+    const email = passwordChangedEmail({ name: ctx.user.name, email: ctx.user.email });
+    await sendEmail({ kind: "account_password_changed", tenantId: ctx.tenant.id, to: ctx.user.email, subject: email.subject, body: email.body }).catch(() => {
       // Logged by sendEmail. The change stands either way.
     });
 

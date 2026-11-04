@@ -1,5 +1,6 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies, headers } from "next/headers";
+import { forwardedHeaders } from "./middleware";
 
 /**
  * The access token a native client sent as `Authorization: Bearer …`, if any.
@@ -23,6 +24,8 @@ export function createClient() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      // P01: calls made on the browser's behalf carry the browser's identity.
+      global: { headers: forwardedHeaders(headers()) },
       cookies: {
         getAll() {
           return cookieStore.getAll();

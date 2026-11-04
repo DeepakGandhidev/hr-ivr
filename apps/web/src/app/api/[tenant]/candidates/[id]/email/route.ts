@@ -1,3 +1,4 @@
+import { planAllows } from "@/lib/plan-features";
 import { NextRequest, NextResponse } from "next/server";
 import { Action, NotFoundError, ValidationError, writeAuditLog } from "@pratibha/shared";
 import { adminPrisma, type PrismaClient } from "@pratibha/prisma";
@@ -79,10 +80,12 @@ export async function POST(
     // Outside any transaction: SMTP round trips run well past the 5s
     // interactive-transaction timeout.
     const result = await sendAsTenant(connection, ctx.tenant, {
+      kind: "candidate_direct",
+      tenantId: ctx.tenant.id,
       to: candidate.email,
       subject,
       body,
-      from: outreachFromAddress(ctx.tenant.slug, ctx.tenant.name),
+      from: outreachFromAddress(ctx.tenant.slug, ctx.tenant.name, planAllows(ctx.tenant, "white_label_emails")),
       ...(logoUrl ? { logoUrl } : {}),
       ...(connection?.address ? { replyTo: connection.address } : {}),
     });
@@ -121,7 +124,7 @@ export async function POST(
       via: result.via,
       savedToSent: result.savedToSent ?? false,
       /** Tells the recruiter it was only logged, not actually delivered. */
-      logOnly: result.via === "log",
+      skipped: result.skipped ?? false,
     });
   });
 }

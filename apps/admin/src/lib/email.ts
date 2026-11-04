@@ -1,35 +1,34 @@
-import { Resend } from "resend";
+import { deliverEmail, type MailerDb } from "@pratibha/shared/mailer";
+import { platformSenderName } from "@pratibha/shared/platform-mail";
+import { db } from "@/lib/db";
 
 /**
  * Mail from the panel: admin invites, and notices to a workspace owner when an
- * admin resets or removes one of their members. Never to a candidate.
+ * admin creates a workspace or changes its members. Never to a candidate.
  *
- * Without RESEND_API_KEY nothing is sent: the message is logged and the caller
- * is told, so a local or staging panel cannot email a real customer by
- * accident (the same default the portal uses).
+ * Sent from Pratibha's mailbox (the Email page). With none connected nothing
+ * is sent; the attempt is logged with the reason and the caller is told.
  */
 export interface Mail {
+  /** One of EMAIL_KINDS. */
+  kind: string;
   to: string;
   subject: string;
   text: string;
+  tenantId?: string | null;
+  /** Send at most once per key. */
+  dedupeKey?: string;
 }
 
-export async function sendMail(mail: Mail): Promise<{ sent: boolean }> {
-  const key = process.env.RESEND_API_KEY;
-  const from =
-    process.env.ADMIN_EMAIL_FROM ??
-    (process.env.RESEND_FROM_DOMAIN ? `Pratibha <team@${process.env.RESEND_FROM_DOMAIN}>` : null);
-
-  if (!key || !from) {
-    console.info(`[admin mail, not sent: no RESEND_API_KEY]\nTo: ${mail.to}\nSubject: ${mail.subject}\n\n${mail.text}\n`);
-    return { sent: false };
-  }
-
-  const resend = new Resend(key);
-  const { error } = await resend.emails.send({ from, to: mail.to, subject: mail.subject, text: mail.text });
-  if (error) {
-    console.error("[admin mail] send failed", error);
-    return { sent: false };
-  }
-  return { sent: true };
+export async function sendMail(mail: Mail): Promise<{ sent: boolean; error?: string }> {
+  const result = await deliverEmail(db as unknown as MailerDb, {
+    kind: mail.kind,
+    tenantId: mail.tenantId ?? null,
+    ...(mail.dedupeKey ? { dedupeKey: mail.dedupeKey } : {}),
+    to: mail.to,
+    subject: mail.subject,
+    text: mail.text,
+    fromName: platformSenderName(),
+  });
+  return { sent: result.ok, error: result.error };
 }

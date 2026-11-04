@@ -17,7 +17,7 @@ export function usagePeriod(now: Date = new Date()): string {
 export const PAYING: TenantStatus[] = ["active", "past_due"];
 
 /** Shown in the list. `deleted` (erased) workspaces are not. */
-export const LISTED: TenantStatus[] = ["trial", "active", "past_due", "suspended", "deleted_pending"];
+export const LISTED: TenantStatus[] = ["trial", "pending_payment", "active", "past_due", "suspended", "deleted_pending"];
 
 export interface Allowance {
   minutes: number;
@@ -85,6 +85,8 @@ export function statusChip(status: TenantStatus, minutesUsed: number, minutesAll
       return { label: "Suspended", tone: "red" };
     case "past_due":
       return { label: "Past due", tone: "red" };
+    case "pending_payment":
+      return { label: "Awaiting first payment", tone: "amber" };
     case "deleted_pending":
       return { label: "Deletion pending", tone: "red" };
     case "deleted":

@@ -1,17 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import ThemeToggle from "@/components/ThemeToggle";
+import { useCopy } from "@/lib/copy-client";
 
 export default function LoginPage() {
   const router = useRouter();
+  const t = useCopy();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // /auth/confirm sends a link it could not use back here (?link=expired|invalid).
+  useEffect(() => {
+    const link = new URLSearchParams(window.location.search).get("link");
+    if (link === "expired" || link === "invalid") setError(t("copy.auth.login.error_link"));
+  }, [t]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -47,9 +55,9 @@ export default function LoginPage() {
       // This used to tell the user to run "npm run db:mock:auth" — a developer
       // instruction, referring to seed data that no longer exists, shown to
       // whoever hit the problem.
-      setError("This login is not linked to a workspace. Sign up to create one, or ask your admin for an invite.");
+      setError(t("copy.auth.login.error_no_workspace"));
     } else {
-      setError("Could not determine your workspace. Please try again.");
+      setError(t("copy.auth.login.error_workspace_lookup"));
     }
     setLoading(false);
   }
@@ -64,16 +72,16 @@ export default function LoginPage() {
           <strong style={{ fontSize: 15 }}>Pratibha</strong>
         </div>
 
-        <h1 style={{ fontSize: 21 }}>Welcome back</h1>
+        <h1 style={{ fontSize: 21 }}>{t("copy.auth.login.title")}</h1>
         <p className="muted" style={{ marginBottom: 22 }}>
-          Log in to your hiring workspace.
+          {t("copy.auth.login.subtitle")}
         </p>
 
         <form onSubmit={handleSubmit} className="stack">
           {error && <div className="notice notice-error">{error}</div>}
 
           <div>
-            <label htmlFor="email">Work email</label>
+            <label htmlFor="email">{t("copy.auth.login.email_label")}</label>
             <input
               id="email"
               type="email"
@@ -86,7 +94,10 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label htmlFor="password">Password</label>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <label htmlFor="password">{t("copy.auth.login.password_label")}</label>
+              <Link href="/forgot-password" style={{ fontSize: 13 }}>{t("copy.auth.login.forgot_link")}</Link>
+            </div>
             <input
               id="password"
               type="password"
@@ -98,12 +109,12 @@ export default function LoginPage() {
           </div>
 
           <button type="submit" className="primary" disabled={loading} style={{ width: "100%" }}>
-            {loading ? "Logging in…" : "Log in"}
+            {loading ? t("copy.auth.login.submitting") : t("copy.auth.login.submit")}
           </button>
         </form>
 
         <p className="muted" style={{ marginTop: 20, textAlign: "center", fontSize: 13 }}>
-          Don&apos;t have an account? <Link href="/signup">Create a workspace</Link>
+          {t("copy.auth.login.no_account")} <Link href="/signup">{t("copy.auth.login.signup_link")}</Link>
         </p>
       </div>
     </main>

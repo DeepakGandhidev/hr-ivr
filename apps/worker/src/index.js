@@ -16,6 +16,12 @@ import { CallSession } from './lib/callSession.js';
 import { PlivoStream } from './audio/plivoStream.js';
 import { gracefulShutdown } from './utils/shutdown.js';
 import { startPoller } from './ingestion/poller.js';
+import { startInboundSmtp } from './ingestion/inboundSmtp.js';
+import { setting } from '@pratibha/shared/settings-runtime';
+import { startWorkerSettings, followSettings } from './config/live.js';
+
+// Admin panel settings first, so the config below is built from them.
+await startWorkerSettings(console);
 
 const config = loadConfig();
 const logger = pino({
@@ -32,6 +38,8 @@ if (problems.length) {
   }
   logger.warn('Starting with an incomplete configuration - calls will fail.');
 }
+
+followSettings(config, logger);
 
 const tools = new ToolExecutor(config, logger);
 const agent = new ScreeningAgent(config, logger, tools);
@@ -137,11 +145,18 @@ server.listen(config.port, () => {
 });
 
 // Start the asynchronous CV/email ingestion scheduler alongside the voice server.
-const poller = startPoller(logger, Number(process.env.EMAIL_POLL_INTERVAL_MS) || undefined);
+// The interval is fixed for the life of the timer, so a change applies on restart.
+const poller = startPoller(logger, setting('email.poll_interval_minutes') * 60_000 || undefined);
 
-// The poller is drained inside gracefulShutdown rather than from its own
-// signal handler, which used to race the process.exit() in there and could
-// leave IMAP sockets open on the mail server.
-gracefulShutdown(server, wss, calls, logger, poller);
+// Forwarded mail is pushed to us rather than pulled; off unless
+// INBOUND_SMTP_PORT is set, so a dev machine does not try to bind port 25.
+const inbound = startInboundSmtp(logger);
+
+// Both are drained inside gracefulShutdown rather than from their own signal
+// handlers, which used to race the process.exit() in there and could leave
+// IMAP sockets open on the mail server.
+gracefulShutdown(server, wss, calls, logger, {
+  stop: () => Promise.all([poller.stop(), inbound?.stop()]),
+});
 
 export { prisma };

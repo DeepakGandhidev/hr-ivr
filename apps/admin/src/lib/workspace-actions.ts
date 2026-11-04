@@ -1,9 +1,9 @@
 import type { AdminSession, AdminUser, Tenant, TenantStatus } from "@pratibha/prisma";
-import { DEFAULT_OUTREACH_TEMPLATES, DEFAULT_PROTOCOL_INSTRUCTION } from "@pratibha/shared";
+import { defaultOutreachTemplates, defaultProtocolInstruction } from "@pratibha/shared";
 import { db, type Tx } from "@/lib/db";
 import { recordActivity, SIGN_IN_AS_ACTION } from "@/lib/activity";
 import { badRequest, conflict, forbidden, notFound, AdminApiError } from "@/lib/http";
-import { getSetting } from "@/lib/settings";
+import { getSetting, getSettings } from "@/lib/settings";
 import { currentPlan, currentTrial, packLabel } from "@/lib/pricing";
 import { ensureSubscription, recordPayment, METHOD_LABEL } from "@/lib/ledger";
 import { usagePeriod } from "@/lib/workspaces";
@@ -12,6 +12,10 @@ import { verifyTotp } from "@/lib/auth/totp";
 import { openTotp } from "@/lib/auth/secrets";
 import { confirmUrl, createPortalIdentity, oneTimeToken, portalUrl } from "@/lib/gotrue";
 import { sendMail } from "@/lib/email";
+import { longDate } from "@/lib/format";
+import { SETTINGS_BY_KEY } from "@pratibha/shared/settings-registry";
+import { settingText } from "@pratibha/shared/settings-runtime";
+import { assertRemovable } from "@/lib/workspace-edit";
 
 /**
  * What an admin does to a workspace. Each function checks the state it is
@@ -144,7 +148,7 @@ export async function addPack(
  * price is today's.
  */
 export async function changePlan(admin: AdminUser, tenantId: string, planKey: string, reason: string) {
-  return db.$transaction(async (tx) => {
+  const changed = await db.$transaction(async (tx) => {
     const tenant = await loadTenant(tx, tenantId);
     assertOpen(tenant);
     const target = await currentPlan(planKey, tx);
@@ -189,7 +193,62 @@ export async function changePlan(admin: AdminUser, tenantId: string, planKey: st
       },
       tx
     );
-    return { message: `${tenant.name} is now on ${target.name}. It applies on their next screen load.` };
+    return { tenant, from, to: target.name, at: new Date() };
+  });
+
+  // After the commit; a mail that fails does not undo the change.
+  await sendPlanChanged(changed).catch((err) => console.error("[mail] plan_changed failed", err));
+  return { message: `${changed.tenant.name} is now on ${changed.to}. It applies on their next screen load.` };
+}
+
+/** Copy from the admin panel (Text and emails), same keys and defaults as the portal reads. */
+function copy(key: string, vars: Record<string, string> = {}): string {
+  const text = settingText(key, String(SETTINGS_BY_KEY[key]?.default ?? ""));
+  return text.replace(/\{(\w+)\}/g, (match, name: string) => vars[name] ?? match);
+}
+
+/**
+ * The plan_changed billing email, as the portal sends it: to the workspace's
+ * billing contact unless they switched it off, else the owner.
+ */
+async function sendPlanChanged(change: { tenant: Tenant; from: string; to: string; at: Date }) {
+  const { tenant } = change;
+  const sub = await db.subscription.findUnique({
+    where: { tenantId: tenant.id },
+    select: { billingContactEmail: true, billingContactPrefs: true },
+  });
+  const prefs = (sub?.billingContactPrefs ?? {}) as Record<string, unknown>;
+  const owner = await db.user.findFirst({
+    where: { tenantId: tenant.id, role: "owner", removedAt: null },
+    orderBy: { createdAt: "asc" },
+    select: { email: true },
+  });
+  const to = sub?.billingContactEmail && prefs.plan_changed !== false ? sub.billingContactEmail : owner?.email;
+  if (!to) return;
+
+  const product = settingText("brand.product_name", "Pratibha");
+  await sendMail({
+    kind: "plan_changed",
+    tenantId: tenant.id,
+    // Once per change, even if the action is submitted twice.
+    dedupeKey: `plan_changed:${tenant.id}:${change.to}:${new Date().toISOString().slice(0, 16)}`,
+    to,
+    subject: copy("copy.email.plan_changed.subject", { product, new_plan: change.to }),
+    text: [
+      copy("copy.email.billing.greeting"),
+      "",
+      copy("copy.email.plan_changed.body", {
+        company: tenant.name,
+        old_plan: change.from,
+        new_plan: change.to,
+        effective_date: longDate(change.at),
+      }),
+      "",
+      copy("copy.email.plan_changed.action"),
+      portalUrl(`/${tenant.slug}/settings/subscription`),
+      "",
+      copy("copy.email.billing.signoff", { product }),
+    ].join("\n"),
   });
 }
 
@@ -525,12 +584,16 @@ export async function sendMemberReset(admin: AdminUser, tenantId: string, userId
   const token = await oneTimeToken("recovery", member.email);
   const link = confirmUrl(token, "recovery", "/reset-password");
   const toMember = await sendMail({
+    kind: "member_password_reset",
+    tenantId: tenant.id,
     to: member.email,
     subject: "Reset your Pratibha password",
     text: `Hi ${member.name ?? ""},\n\nThe Pratibha team has sent you a link to choose a new password for ${tenant.name}:\n\n${link}\n\nIt works once, for an hour. If you did not ask for this, you can ignore it; your password stays as it is.\n\nPratibha`,
   });
   if (owner) {
     await sendMail({
+      kind: "member_change_notice",
+      tenantId: tenant.id,
       to: owner.email,
       subject: `A password reset was sent to ${member.email}`,
       text: `Hi ${owner.name ?? ""},\n\nFor your records: the Pratibha team sent a password reset link to ${member.email} in ${tenant.name}.\n\nReason given: ${reason}\n\nIf this is unexpected, reply to this email or write to start@pratibha.tech.\n\nPratibha`,
@@ -545,9 +608,7 @@ export async function sendMemberReset(admin: AdminUser, tenantId: string, userId
 
 export async function removeMember(admin: AdminUser, tenantId: string, userId: string, reason: string) {
   const { tenant, member, owner } = await memberAndOwner(tenantId, userId);
-  if (member.role === "owner") {
-    throw conflict("The owner cannot be removed. Change ownership in the portal first.");
-  }
+  assertRemovable(tenant.users, member.id);
 
   await db.$transaction(async (tx) => {
     await tx.user.update({
@@ -572,6 +633,8 @@ export async function removeMember(admin: AdminUser, tenantId: string, userId: s
   }
   if (owner) {
     await sendMail({
+      kind: "member_change_notice",
+      tenantId: tenant.id,
       to: owner.email,
       subject: `${member.email} was removed from ${tenant.name}`,
       text: `Hi ${owner.name ?? ""},\n\nFor your records: the Pratibha team removed ${member.email} (${member.role}) from ${tenant.name}. They can no longer sign in. Jobs, notes and approvals they made are kept.\n\nReason given: ${reason}\n\nIf this is unexpected, reply to this email or write to start@pratibha.tech.\n\nPratibha`,
@@ -614,6 +677,14 @@ export async function createWorkspace(
 
   const authUserId = await createPortalIdentity(email, input.ownerName);
 
+  // The starting templates the admin panel sets (Messages), as the portal's
+  // own sign-up uses them; empty keeps the built-in wording.
+  const settings = await getSettings();
+  const text = (key: string, fallback: string) => {
+    const v = settings[key];
+    return typeof v === "string" && v.trim() ? v : fallback;
+  };
+
   const tenant = await db.$transaction(async (tx) => {
     const t = await tx.tenant.create({
       data: {
@@ -630,10 +701,10 @@ export async function createWorkspace(
       data: { tenantId: t.id, email, name: input.ownerName.trim(), role: "owner", authProviderId: authUserId },
     });
     await tx.outreachTemplate.createMany({
-      data: DEFAULT_OUTREACH_TEMPLATES.map((tpl) => ({ ...tpl, tenantId: t.id, isDefault: true })),
+      data: defaultOutreachTemplates(text).map((tpl) => ({ ...tpl, tenantId: t.id, isDefault: true })),
     });
     await tx.interviewProtocol.create({
-      data: { tenantId: t.id, jobId: null, instructionText: DEFAULT_PROTOCOL_INSTRUCTION, version: 1 },
+      data: { tenantId: t.id, jobId: null, instructionText: defaultProtocolInstruction(text), version: 1 },
     });
     await tx.usageMeter.create({ data: { tenantId: t.id, period: usagePeriod() } });
     await ensureSubscription(tx, t);
@@ -654,6 +725,8 @@ export async function createWorkspace(
   const token = await oneTimeToken("recovery", email);
   const link = confirmUrl(token, "recovery", "/reset-password");
   const mail = await sendMail({
+    kind: "workspace_ready",
+    tenantId: tenant.id,
     to: email,
     subject: `Your Pratibha workspace ${tenant.name} is ready`,
     text: `Hi ${input.ownerName},\n\nThe Pratibha team has set up ${tenant.name} for you at ${portalUrl(`/${slug}`)}.\n\nChoose your password here to sign in (the link works once, for an hour):\n\n${link}\n\nPratibha`,

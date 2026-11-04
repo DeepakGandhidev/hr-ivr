@@ -7,6 +7,8 @@
  * here, so the button's copy cannot drift from what the server enforces.
  */
 
+import { savedSetting } from './constants.js';
+
 /** CVs a recruiter may select, and a single request may carry, at one time. */
 export const MAX_CV_UPLOAD_FILES = 100;
 
@@ -26,6 +28,16 @@ export const CV_UPLOAD_BATCH_SIZE = 20;
 
 /** Mirrors the worker extractor's own per-attachment ceiling. */
 export const MAX_CV_FILE_BYTES = 15 * 1024 * 1024;
+
+/**
+ * MAX_CV_FILE_BYTES as set in the admin panel (limits.cv_max_mb), which the
+ * worker's extractor also reads. constants.ts has no imports, so this file
+ * stays as light as it was for the browser.
+ */
+export function maxCvFileBytes(): number {
+  const mb = savedSetting<number | null>('limits.cv_max_mb', null);
+  return mb === null ? MAX_CV_FILE_BYTES : mb * 1024 * 1024;
+}
 
 /**
  * Byte budget for one request, applied alongside CV_UPLOAD_BATCH_SIZE.

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useCopy } from "@/lib/copy-client";
 
 interface Job {
   id: string;
@@ -97,6 +98,7 @@ function StatChip({ value, label, tone }: { value: number; label: string; tone: 
 }
 
 export default function CallWindowsPage({ params }: { params: { tenant: string } }) {
+  const t = useCopy();
   const { tenant } = params;
   const [jobs, setJobs] = useState<Job[]>([]);
   const [windows, setWindows] = useState<Record<string, CallWindow>>({});
@@ -197,11 +199,10 @@ export default function CallWindowsPage({ params }: { params: { tenant: string }
         <div className="grid h-11 w-11 flex-none place-items-center rounded-2xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-hover)] text-white shadow-lg shadow-[var(--accent)]/25">
           <ClockIcon className="h-5 w-5" />
         </div>
-        <h1 className="!mb-0">Call windows</h1>
+        <h1 className="!mb-0">{t("copy.portal.settings.call_windows.title")}</h1>
       </div>
       <p className="muted mb-5">
-        When the agent will answer screening calls for each job. Outside these hours a caller is told to try again
-        later.
+        {t("copy.portal.settings.call_windows.intro")}
       </p>
 
       {loadedWindows.length > 0 && (

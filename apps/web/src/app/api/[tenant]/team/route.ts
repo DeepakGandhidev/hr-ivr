@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Action, ValidationError, UserRole } from "@pratibha/shared";
 import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
+import { assertWithinPlanLimit, planLimit } from "@/lib/plan-features";
 import { z } from "zod";
 
 const inviteSchema = z.object({
@@ -16,7 +17,7 @@ export async function GET(
 ) {
   const { tenant } = params;
   return handleApi(() =>
-    withTenantAuth(tenant, Action.teamManage, async (_ctx, tx) => {
+    withTenantAuth(tenant, Action.teamManage, async (ctx, tx) => {
       const users = await tx.user.findMany({
         // Members an admin removed keep their row (their jobs and notes point
         // at it) but are no longer part of the team.
@@ -24,7 +25,8 @@ export async function GET(
         orderBy: { createdAt: "desc" },
         select: { id: true, email: true, name: true, role: true, createdAt: true },
       });
-      return { users };
+      // The plan's member limit (null is unlimited), for the Team page to show.
+      return { users, memberLimit: planLimit(ctx.tenant, "members") };
     })
   );
 }
@@ -50,6 +52,11 @@ export async function POST(
       if (existing) {
         throw new ValidationError("User already exists in this workspace");
       }
+
+      const members = await tx.user.count({ where: { removedAt: null } });
+      assertWithinPlanLimit(ctx.tenant, "members", members, 1, (max) =>
+        `Your plan allows ${max} team ${max === 1 ? "member" : "members"}, and the workspace has ${members}. Remove someone or upgrade your plan to invite more.`
+      );
 
       const user = await tx.user.create({
         data: {

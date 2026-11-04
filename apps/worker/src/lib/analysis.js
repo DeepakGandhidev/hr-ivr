@@ -1,8 +1,10 @@
-import { Anthropic } from '@anthropic-ai/sdk';
 import { prisma } from '@pratibha/prisma';
+import { setting } from '@pratibha/shared/settings-runtime';
 import { samplingFor, thinkingFor } from './sampling.js';
 import { createAssessmentReport } from '../db/index.js';
 import { cvList } from './cv.js';
+import { formatBandSpoken, formatRupeesSpoken } from '@pratibha/shared';
+import { liveAnthropicClient } from './anthropicClient.js';
 
 const INTERNAL_RECOMMENDATIONS = ['pursue', 'hold', 'do_not_pursue'];
 
@@ -131,6 +133,10 @@ export function requirementFit(input, criteria) {
   const byId = new Map((criteria ?? []).map(c => [c.id, c]));
   const seen = new Set();
   const out = [];
+  const maxChars = setting('report.evidence_chars');
+  // Criteria carry a weight, not a kind; must-haves are the ones weighted as
+  // such, whatever the must-have weight is currently set to.
+  const mustWeight = setting('screening.must_have_weight');
 
   for (const row of input) {
     const criterion = byId.get(row?.criterion_id);
@@ -143,9 +149,9 @@ export function requirementFit(input, criteria) {
     out.push({
       criterionId: criterion.id,
       requirement: criterion.criterion,
-      kind: criterion.weight >= 5 ? 'must' : 'good',
+      kind: criterion.weight >= mustWeight ? 'must' : 'good',
       status: row.status,
-      evidence: evidence.length > 400 ? `${evidence.slice(0, 397)}…` : evidence,
+      evidence: evidence.length > maxChars ? `${evidence.slice(0, maxChars - 3)}…` : evidence,
     });
   }
 
@@ -201,10 +207,17 @@ export class PostCallAnalyst {
       orderBy: { version: 'desc' },
     }));
     this.saveReport = deps.saveReport ?? createAssessmentReport;
-    this.anthropic = new Anthropic({
-      apiKey: config.anthropic.apiKey,
-      ...(config.anthropic.baseUrl ? { baseURL: config.anthropic.baseUrl } : {})
-    });
+    this.liveClient = liveAnthropicClient(config);
+    this.clientOverride = null;
+  }
+
+  /** Rebuilt when the key or endpoint changes; tests may replace it. */
+  get anthropic() {
+    return this.clientOverride ?? this.liveClient();
+  }
+
+  set anthropic(client) {
+    this.clientOverride = client;
   }
 
   async analyse(session) {
@@ -223,8 +236,8 @@ export class PostCallAnalyst {
 
     const response = await this.anthropic.messages.create({
       model: this.config.anthropic.analysisModel,
-      max_tokens: 16000,
-      ...samplingFor(this.config.anthropic.analysisModel, 0),
+      max_tokens: setting('ai.analysis_max_tokens'),
+      ...samplingFor(this.config.anthropic.analysisModel, setting('ai.analysis_temperature')),
       ...thinkingFor(this.config.anthropic.analysisModel),
       system,
       tools: [SCHEMA],
@@ -233,7 +246,7 @@ export class PostCallAnalyst {
         role: 'user',
         content: `ROLE: ${session.job?.title ?? ''}\n` +
           `JOB DESCRIPTION\n${session.latestApprovedJd?.bodyMd ?? session.job?.title ?? ''}\n\n` +
-          `SCREENING CRITERIA\n${session.criteria.map(c => `[id ${c.id}] ${c.criterion} (weight ${c.weight}/5). ${c.evaluation_guidance ?? ''}`).join('\n')}\n\n` +
+          `SCREENING CRITERIA\n${session.criteria.map(c => `[id ${c.id}] ${c.criterion} (weight ${c.weight}/${setting('screening.must_have_weight')}). ${c.evaluation_guidance ?? ''}`).join('\n')}\n\n` +
           `CANDIDATE CV SUMMARY\n${this.#cvSummary(session.candidate)}\n\n` +
           `TRANSCRIPT\n${transcript}`
       }]
@@ -270,9 +283,14 @@ export class PostCallAnalyst {
           // Per-requirement fit (J62). Kept in dimensions, so no schema change;
           // jdFitSummary below stays as the fallback for reports without it.
           requirementFit: assessment.requirement_fit,
+          // I20: screener answers, as recorded during the call.
+          ...(session.practicalDetails ? { practicalDetails: session.practicalDetails } : {}),
+          ...(session.salaryMismatch ? { salaryMismatch: true } : {}),
         },
         strengths: assessment.strengths,
-        concerns: assessment.gaps,
+        // I21: an expectation above the band is always a concern, whatever
+        // the model wrote, so it can never be missing from the report.
+        concerns: [...salaryConcern(session), ...(assessment.gaps ?? [])],
         notableQuotes: {},
 
         // Falls back to the criterion mean when the model omits the score - but
@@ -371,6 +389,16 @@ export class PostCallAnalyst {
       dropped_scores: rejected.length
     };
   }
+}
+
+/** I21: the mismatch concern, worded from the recorded numbers. */
+export function salaryConcern(session) {
+  const m = session?.practicalDetails?.salaryMismatch;
+  if (!session?.salaryMismatch || !m) return [];
+  const expected = m.expectedAnnual ? formatRupeesSpoken(m.expectedAnnual) : 'their stated figure';
+  const band = formatBandSpoken(session.job?.salaryMin ?? null, m.bandMax);
+  const outcome = { note: 'Noted without raising it on the call.', check: 'They were told the band and asked whether they could work within it.', end: 'The interview was wrapped up early because of it.' }[m.action] ?? '';
+  return [`Salary mismatch: expects about ${expected} a year, above the role's band of ${band}. ${outcome}`.trim()];
 }
 
 function mapRecommendation(internal) {

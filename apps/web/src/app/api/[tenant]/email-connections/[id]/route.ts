@@ -10,6 +10,7 @@ import { withTenantAuth } from "@/lib/authz";
 import { handleApi } from "@/lib/api-errors";
 import { checkImap } from "@/lib/imap";
 import { redactConnection } from "@/lib/email-connection";
+import { assertPlanAllows } from "@/lib/plan-features";
 
 export const runtime = "nodejs";
 
@@ -39,6 +40,15 @@ export async function PATCH(
       const existing = await tx.emailConnection.findUnique({ where: { id } });
       if (!existing) {
         throw new NotFoundError("Email connection not found");
+      }
+
+      // Turning auto routing on needs the plan; leaving it as it was does not.
+      if (input.autoRoute === true && !existing.autoRoute) {
+        assertPlanAllows(ctx.tenant, "auto_route_mailboxes", "Auto routing is not included in your plan. Choose the one job this mailbox files into.");
+      }
+
+      if (input.imapPassword && existing.provider !== "imap") {
+        throw new ValidationError("This mailbox signs in with Google or Microsoft, not a password.");
       }
 
       if (input.defaultJobId) {

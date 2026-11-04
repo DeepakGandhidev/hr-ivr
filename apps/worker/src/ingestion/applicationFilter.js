@@ -1,3 +1,4 @@
+import { setting } from '@pratibha/shared/settings-runtime';
 import { isCvNamed } from './extractText.js';
 
 /**
@@ -30,6 +31,51 @@ const ROBOT_DOMAINS = /(^|\.)(mail|email|em\d*|mailer|notifications?|updates?|an
 /** Words that indicate someone is applying, in English and common Hinglish. */
 const APPLICATION_TERMS =
   /\b(appl(y|ying|ication|ied)|resume|resumé|cv|curriculum vitae|candidature|position|vacancy|opening|job|role|interview|hiring|recruit|fresher|experienced|notice period|current ctc|expected ctc|naukri|internship|intern)\b/i;
+
+/**
+ * Extra entries from the admin panel, added to the lists above (never in place
+ * of them). They are typed by a person, so each is escaped rather than trusted
+ * as a pattern: "c++" or "a.b" must match literally, not as regex syntax.
+ */
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function extraList(key) {
+  const v = setting(key);
+  return Array.isArray(v) ? v.map((i) => String(i).trim().toLowerCase()).filter(Boolean) : [];
+}
+
+/** Extra sender names, matched like ROBOT_SENDERS: the whole local part, or the name then -, + or . */
+function isExtraRobotSender(local) {
+  return extraList('email.robot_senders').some(
+    (name) => local === name || (local.startsWith(name) && /^[-+.]/.test(local.slice(name.length)))
+  );
+}
+
+/** Extra domains match themselves and any subdomain: "acme.com" covers "mail.acme.com". */
+function isExtraRobotDomain(domain) {
+  return extraList('email.robot_domains')
+    .map((d) => d.replace(/^[@.]+/, ''))
+    .some((d) => d && (domain === d || domain.endsWith(`.${d}`)));
+}
+
+// Compiled once per distinct list rather than per message.
+let termsCache = { key: null, re: null };
+
+/**
+ * Extra application terms, as whole words or phrases like APPLICATION_TERMS.
+ * Lookarounds on letters and digits stand in for \b, which only knows ASCII
+ * and so would never match "résumé" or a Devanagari term, and would refuse a
+ * term that ends in a symbol such as "c++".
+ */
+function extraTermsPattern() {
+  const terms = extraList('email.application_terms');
+  const key = terms.join('\n');
+  if (termsCache.key !== key) {
+    const body = terms.map((t) => escapeRegex(t).replace(/\s+/g, '\\s+')).join('|');
+    termsCache = { key, re: body ? new RegExp(`(?<![\\p{L}\\p{N}_])(?:${body})(?![\\p{L}\\p{N}_])`, 'iu') : null };
+  }
+  return termsCache.re;
+}
 
 /** Headers that mark a message as bulk, automated, or a mailing list. */
 function isBulk(headers = {}) {
@@ -66,8 +112,9 @@ function isRobotSender(from) {
   if (/(^|[-_.+])(no-?reply|do-?not-?reply)([-_.+]|$)/.test(local)) {
     return `sender "${local}@" is an automated address`;
   }
-  if (ROBOT_SENDERS.test(local)) return `sender "${local}@" is an automated address`;
+  if (ROBOT_SENDERS.test(local) || isExtraRobotSender(local)) return `sender "${local}@" is an automated address`;
   if (ROBOT_DOMAINS.test(domain)) return `sender domain "${domain}" is a bulk-mail domain`;
+  if (isExtraRobotDomain(domain)) return `sender domain "${domain}" is on the ignore list`;
   return null;
 }
 
@@ -114,7 +161,7 @@ export function classifyMessage(message, options = {}) {
 
   // No attachment and not obviously bulk: require the message to actually talk
   // about applying, so ordinary correspondence does not become a candidate.
-  if (!APPLICATION_TERMS.test(haystack)) {
+  if (!APPLICATION_TERMS.test(haystack) && !extraTermsPattern()?.test(haystack)) {
     return { accept: false, reason: 'no application wording and no CV attached', signal: 'off-topic' };
   }
 

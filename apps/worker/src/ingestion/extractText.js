@@ -1,4 +1,5 @@
 import { PDFParse } from 'pdf-parse';
+import { setting } from '@pratibha/shared/settings-runtime';
 
 /**
  * Turn a CV attachment into plain text.
@@ -14,11 +15,11 @@ import { PDFParse } from 'pdf-parse';
  * So each format is now either decoded properly or reported as unsupported.
  */
 
-/** Refuse to buffer an unreasonable attachment into memory. */
-const MAX_BYTES = 15 * 1024 * 1024;
+/** Refuse to buffer an unreasonable attachment into memory (`limits.cv_max_mb`). */
+const maxBytes = () => setting('limits.cv_max_mb') * 1024 * 1024;
 
 /** A malformed PDF can keep pdf.js busy; the poller must not block on one. */
-const PARSE_TIMEOUT_MS = 30_000;
+const parseTimeoutMs = () => setting('limits.cv_parse_timeout_seconds') * 1000;
 
 const KIND = {
   pdf: 'pdf',
@@ -109,7 +110,7 @@ async function extractPdf(buffer) {
     // otherwise land in the text the skill and education pickers read.
     const result = await withTimeout(
       parser.getText({ pageJoiner: '\n' }),
-      PARSE_TIMEOUT_MS,
+      parseTimeoutMs(),
       'PDF text extraction timed out'
     );
     return { text: tidy(result.text), pages: result.total ?? result.pages?.length ?? null };
@@ -129,8 +130,9 @@ export async function extractText(buffer, filename = '') {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
     return { ...base, ok: false, kind: KIND.empty, reason: 'Attachment was empty' };
   }
-  if (buffer.length > MAX_BYTES) {
-    return { ...base, ok: false, kind: KIND.unsupported, reason: `Attachment exceeds ${MAX_BYTES} bytes` };
+  const limit = maxBytes();
+  if (buffer.length > limit) {
+    return { ...base, ok: false, kind: KIND.unsupported, reason: `Attachment exceeds ${limit} bytes` };
   }
 
   const kind = sniff(buffer, filename);
